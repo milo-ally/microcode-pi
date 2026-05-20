@@ -166,7 +166,11 @@ export class App {
       this.editor.setText('')
     }
     this.editor.onCtrlC = () => {
-      this.exit()
+      if (this.isAgentBusy()) {
+        this.agent.abort()
+      } else {
+        this.exit()
+      }
     }
     this.editor.onCtrlD = () => {
       this.exit()
@@ -658,7 +662,7 @@ export class App {
       `${theme.fg('accent', 'Keyboard Shortcuts:')}`,
       '',
       `  ${theme.bold('Escape')}              Interrupt current operation`,
-      `  ${theme.bold('Ctrl+C')}              Exit`,
+      `  ${theme.bold('Ctrl+C')}              Interrupt (when busy) / Exit`,
       `  ${theme.bold('Ctrl+D')}              Exit (when input is empty)`,
       `  ${theme.bold('Enter')}               Submit message`,
       `  ${theme.bold('Shift+Enter')}         New line in editor`,
@@ -823,6 +827,11 @@ export class App {
 
         case 'turn_end':
           this.hideWorking()
+          if (event.message.role === 'assistant' && event.message.stopReason === 'aborted') {
+            this.chatContainer.addChild(
+              new Text(chalk.hex('#cc6666').bold('\nInterrupted\n'), 1, 0),
+            )
+          }
           this.chatContainer.addChild(new Spacer(1))
           // Save messages to session after each turn
           void this.sessionManager.saveMessages(this.agent.state.messages as AgentMessage[])
@@ -874,6 +883,10 @@ export class App {
 
   stop(): void {
     this.ui.stop()
+  }
+
+  private isAgentBusy(): boolean {
+    return this.agent.state.isStreaming || this.agent.state.pendingToolCalls.size > 0
   }
 
   private exit(): void {
