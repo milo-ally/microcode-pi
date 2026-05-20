@@ -77,3 +77,7 @@ export function getEditorTheme() {
     },
   }
 }
+
+export function getBashModeBorderColor(): (text: string) => string {
+  return (text: string) => chalk.hex(COLORS.accent)(text)
+}

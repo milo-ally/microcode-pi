@@ -17,11 +17,12 @@ import {
 import chalk from 'chalk'
 import { resolveConfig, createModelForId, type ResolvedConfig } from '../config.ts'
 import { getSystemPrompt } from '../constants/prompts.ts'
-import { theme, getEditorTheme, getMarkdownTheme } from './theme.ts'
+import { theme, getEditorTheme, getMarkdownTheme, getBashModeBorderColor } from './theme.ts'
 import { MicrocodeEditor } from './components/microcodeEditor.ts'
 import { FooterComponent } from './components/footer.ts'
 import { AssistantMessageComponent } from './components/assistantMessage.ts'
 import { ToolExecutionComponent } from './components/toolExecution.ts'
+import { BashExecutionComponent } from './components/bashExecution.ts'
 import { FileEditToolUI } from '../tools/FileEditTool/UI.tsx'
 import { FileWriteToolUI } from '../tools/FileWriteTool/UI.tsx'
 import { FileReadToolUI } from '../tools/FileReadTool/UI.tsx'
@@ -75,6 +76,8 @@ export class App {
   private compacting = false
   private permissionPromptActive = false
   private permissionManager: PermissionManager
+  private isBashMode = false
+  private bashComponent?: BashExecutionComponent
   onExit?: () => void | Promise<void>
 
   constructor(agent: Agent, mcpClient?: McpClientManager, sessionManager?: SessionManager, permissionManager?: PermissionManager, modelId?: string, thinkingLevel?: ThinkingLevel) {
@@ -116,6 +119,17 @@ export class App {
       const userInput = await this.getUserInput()
       if (!userInput.trim()) continue
 
+      // Handle bash commands (! for normal, !! for excluded from context)
+      if (userInput.startsWith('!')) {
+        const isExcluded = userInput.startsWith('!!')
+        const command = isExcluded ? userInput.slice(2).trim() : userInput.slice(1).trim()
+        if (command) {
+          await this.handleBashCommand(command, isExcluded)
+          this.isBashMode = false
+          continue
+        }
+      }
+
       // Handle slash commands locally
       if (userInput.startsWith('/')) {
         const handled = this.handleSlashCommand(userInput.trim())
@@ -149,6 +163,7 @@ export class App {
       theme.dim('escape') + theme.dim(' interrupt'),
       theme.dim('ctrl+c/ctrl+d') + theme.dim(' exit'),
       theme.dim('/') + theme.dim(' commands'),
+      theme.dim('!') + theme.dim(' shell'),
     ].join(theme.dim(' · '))
     const onboarding = theme.dim(
       `${APP_NAME} can explain its own features and help you write, edit, and understand code. Ask it anything.`,
@@ -167,6 +182,15 @@ export class App {
 
     this.editor.onSubmit = (text: string) => {
       this.handleEditorSubmit(text)
+    }
+
+    // Detect bash mode (! prefix)
+    this.editor.onChange = (text: string) => {
+      const wasBashMode = this.isBashMode
+      this.isBashMode = text.trimStart().startsWith('!')
+      if (wasBashMode !== this.isBashMode) {
+        this.updateEditorBorderColor()
+      }
     }
 
     // App-level key handlers on the Editor (pi-coding-agent pattern)
@@ -251,6 +275,44 @@ export class App {
     }
 
     this.editor.setAutocompleteProvider(provider)
+  }
+
+  private async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
+    // Create UI component for display
+    this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext)
+    this.chatContainer.addChild(this.bashComponent)
+    this.ui.requestRender()
+
+    try {
+      const { exec } = await import('child_process')
+      exec(command, { cwd: process.cwd() }, (error, stdout, stderr) => {
+        const output = stdout + stderr
+        if (output) {
+          this.bashComponent?.appendOutput(output)
+        }
+        const exitCode = error ? error.code ?? 1 : 0
+        this.bashComponent?.setComplete(exitCode, false)
+        this.bashComponent = undefined
+        this.updateEditorBorderColor()
+        this.ui.requestRender()
+      })
+    } catch (error) {
+      if (this.bashComponent) {
+        this.bashComponent.setComplete(undefined, false)
+      }
+      this.showError(`Bash command failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      this.bashComponent = undefined
+      this.updateEditorBorderColor()
+    }
+  }
+
+  private updateEditorBorderColor(): void {
+    if (this.isBashMode) {
+      this.editor.borderColor = getBashModeBorderColor()
+    } else {
+      this.editor.borderColor = (text: string) => theme.fg('blue', text)
+    }
+    this.ui.requestRender()
   }
 
   private handleSlashCommand(input: string): boolean {
