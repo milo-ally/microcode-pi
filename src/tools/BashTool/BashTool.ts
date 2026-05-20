@@ -2,6 +2,9 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import { spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { Type, type Static } from 'typebox'
+import type { PermissionBehavior } from '../../permissions/types.ts'
+
+export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask'
 
 const bashSchema = Type.Object({
   command: Type.String({ description: 'Bash command to execute' }),

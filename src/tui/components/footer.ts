@@ -1,7 +1,7 @@
 import { type Component, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
 import chalk from 'chalk'
 import { execSync } from 'child_process'
-import type { Agent } from '@earendil-works/pi-agent-core'
+import type { Agent, ThinkingLevel } from '@earendil-works/pi-agent-core'
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString()
@@ -39,6 +39,7 @@ export class FooterComponent implements Component {
   private modelId: string
   private provider: string
   private cwd: string
+  private thinkingLevel: ThinkingLevel = 'off'
   private totalInput = 0
   private totalOutput = 0
   private totalCost = 0
@@ -46,11 +47,16 @@ export class FooterComponent implements Component {
   private contextTokens: number | null = null
   private contextWindow: number | null = null
 
-  constructor(agent: Agent, modelId: string, provider: string, cwd: string) {
+  constructor(agent: Agent, modelId: string, provider: string, cwd: string, thinkingLevel?: ThinkingLevel) {
     this.agent = agent
     this.modelId = modelId
     this.provider = provider
     this.cwd = cwd
+    if (thinkingLevel) this.thinkingLevel = thinkingLevel
+  }
+
+  setThinkingLevel(level: ThinkingLevel): void {
+    this.thinkingLevel = level
   }
 
   addUsage(input: number, output: number, cost: number): void {
@@ -97,8 +103,9 @@ export class FooterComponent implements Component {
       ? chalk.hex('#666666')(`${pwd}  `) + statsParts.join(chalk.hex('#666666')(' '))
       : chalk.hex('#666666')(pwd)
 
-    // Build right side: (provider) model
-    const rightSide = chalk.hex('#666666')(`(${this.provider}) ${this.modelId}`)
+    // Build right side: (provider) model [thinking]
+    const thinkingStr = this.thinkingLevel !== 'off' ? chalk.hex('#00d7ff')(` • ${this.thinkingLevel}`) : ''
+    const rightSide = chalk.hex('#666666')(`(${this.provider}) ${this.modelId}`) + thinkingStr
 
     const statsLeftWidth = visibleWidth(statsLeft)
     const rightSideWidth = visibleWidth(rightSide)

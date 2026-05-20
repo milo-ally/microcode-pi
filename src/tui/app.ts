@@ -1,4 +1,4 @@
-import type { Agent, AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core'
+import type { Agent, AgentEvent, AgentMessage, ThinkingLevel } from '@earendil-works/pi-agent-core'
 import { generateSummary, DEFAULT_COMPACTION_SETTINGS } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
@@ -8,6 +8,8 @@ import {
   Text,
   Spacer,
   Loader,
+  SelectList,
+  type SelectItem,
   type Component,
   type AutocompleteProvider,
   type SlashCommand,
@@ -25,9 +27,12 @@ import { FileWriteToolUI } from '../tools/FileWriteTool/UI.tsx'
 import { FileReadToolUI } from '../tools/FileReadTool/UI.tsx'
 import { UserMessage } from './components/userMessage.ts'
 import type { McpClientManager } from '../mcp/client.ts'
-import type { McpServerState } from '../mcp/types.ts'
+import type { McpServerState, McpServerConfig } from '../mcp/types.ts'
+import { addMcpServer, removeMcpServer, type ConfigScope } from '../mcp/configWrite.ts'
 import { SessionManager } from '../session/SessionManager.ts'
-import { getCompactionManager } from '../agent.ts'
+import { getCompactionManager, getSkills, getSkillDiagnostics } from '../agent.ts'
+import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool } from '../tools/index.ts'
+import { PermissionManager, type PermissionMode, PERMISSION_MODES } from '../permissions/index.ts'
 
 declare const MACRO: {
   VERSION: string
@@ -39,8 +44,11 @@ const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   { name: 'clear', description: 'Clear the conversation history' },
   { name: 'compact', description: 'Compress conversation context (usage: /compact [instructions])', argumentHint: '[instructions]' },
   { name: 'model', description: 'Show or switch model (usage: /model [model-id])', argumentHint: '[model-id]' },
-  { name: 'mcp', description: 'Show MCP server status and tools (usage: /mcp [enable|disable|reconnect] [server-name])', argumentHint: '[action] [server]' },
+  { name: 'thinking', description: 'Show or set thinking depth (usage: /thinking [level])', argumentHint: '[off|minimal|low|medium|high|xhigh]' },
+  { name: 'mcp', description: 'Manage MCP servers (usage: /mcp [add|remove|enable|disable|reconnect] [args...])', argumentHint: '[action] [args...]' },
   { name: 'session', description: 'Show session info or list sessions', argumentHint: '[list]' },
+  { name: 'permission', description: 'Show or switch permission mode (usage: /permission [mode])', argumentHint: '[mode]' },
+  { name: 'skills', description: 'Show available skills' },
   { name: 'exit', description: 'Exit Microcode' },
   { name: 'help', description: 'Show help and available commands' },
 ]
@@ -58,19 +66,23 @@ export class App {
   private streamingComponent?: AssistantMessageComponent
   private streamingMessage?: AssistantMessage
   private pendingTools = new Map<string, ToolExecutionComponent | FileEditToolUI | FileWriteToolUI | FileReadToolUI>()
+  private toolExecutionInProgress = false // Track if any tool is currently executing
   private loadingAnimation?: Loader
   private lastSigintTime = 0
   private config: ResolvedConfig
   private mcpClient?: McpClientManager
   private sessionManager: SessionManager
   private compacting = false
+  private permissionPromptActive = false
+  private permissionManager: PermissionManager
   onExit?: () => void | Promise<void>
 
-  constructor(agent: Agent, mcpClient?: McpClientManager, sessionManager?: SessionManager) {
+  constructor(agent: Agent, mcpClient?: McpClientManager, sessionManager?: SessionManager, permissionManager?: PermissionManager, modelId?: string, thinkingLevel?: ThinkingLevel) {
     this.agent = agent
     this.mcpClient = mcpClient
     this.sessionManager = sessionManager ?? new SessionManager()
-    this.config = resolveConfig()
+    this.permissionManager = permissionManager ?? new PermissionManager()
+    this.config = modelId ? createModelForId(modelId) : resolveConfig()
     this.ui = new TUI(new ProcessTerminal())
     this.headerContainer = new Container()
     this.chatContainer = new Container()
@@ -81,6 +93,7 @@ export class App {
       this.config.model.id,
       this.config.provider,
       process.cwd(),
+      thinkingLevel ?? agent.state.thinkingLevel,
     )
 
     // Initialize system prompt token count for context usage display
@@ -166,7 +179,9 @@ export class App {
       this.editor.setText('')
     }
     this.editor.onCtrlC = () => {
-      if (this.isAgentBusy()) {
+      if (this.permissionPromptActive) {
+        this.exit()
+      } else if (this.isAgentBusy()) {
         this.agent.abort()
       } else {
         this.exit()
@@ -266,6 +281,18 @@ export class App {
         this.handleSessionCommand(args)
         return true
 
+      case '/permission':
+        this.handlePermissionCommand(args)
+        return true
+
+      case '/thinking':
+        this.handleThinkingCommand(args)
+        return true
+
+      case '/skills':
+        this.handleSkillsCommand()
+        return true
+
       case '/exit':
         this.exit()
         return true
@@ -322,7 +349,7 @@ export class App {
 
       // Calculate tokens before compaction
       const tokensBefore = messagesToSummarize.reduce((sum, m) => {
-        const content = typeof m.content === 'string' ? m.content
+        const content = typeof m.content === 'string' ? m.content 
           : Array.isArray(m.content) ? m.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
           : ''
         return sum + Math.ceil(content.length / 4)
@@ -451,9 +478,23 @@ export class App {
       return
     }
 
+    // Validate model ID (basic check)
+    const trimmedSearch = searchTerm.trim()
+    if (!trimmedSearch) {
+      this.showError('Model ID cannot be empty')
+      return
+    }
+
     // Try to switch model
     try {
-      const { model, apiKey, provider } = createModelForId(searchTerm)
+      const { model, apiKey, provider } = createModelForId(trimmedSearch)
+
+      // Validate provider type
+      if (provider !== 'anthropic' && provider !== 'openai' && provider !== 'custom') {
+        this.showError(`Invalid provider: ${provider}`)
+        return
+      }
+
       this.agent.state.model = model
       this.config = { model, apiKey, provider: provider as ResolvedConfig['provider'] }
 
@@ -494,7 +535,7 @@ export class App {
           new Text(theme.dim('No MCP servers configured.'), 1, 0),
         )
         this.chatContainer.addChild(
-          new Text(theme.dim('Add servers to ~/.microcode/mcp.json or .microcode/mcp.json'), 1, 0),
+          new Text(theme.dim('Use /mcp add <name> <command> to add a server'), 1, 0),
         )
         this.chatContainer.addChild(new Spacer(1))
         this.ui.requestRender()
@@ -541,7 +582,7 @@ export class App {
 
       this.chatContainer.addChild(new Spacer(1))
       this.chatContainer.addChild(
-        new Text(theme.dim('Usage: /mcp [enable|disable|reconnect] <server-name>'), 1, 0),
+        new Text(theme.dim('Usage: /mcp [enable|disable|reconnect|add|remove] <server-name>'), 1, 0),
       )
       this.chatContainer.addChild(new Spacer(1))
       this.ui.requestRender()
@@ -595,12 +636,91 @@ export class App {
       return
     }
 
-    this.showError(`Unknown /mcp action: ${action}. Usage: /mcp [enable|disable|reconnect] <server-name>`)
+    // /mcp add <name> <command> [args...]
+    if (action === 'add') {
+      this.handleMcpAddCommand(args.trim())
+      return
+    }
+
+    // /mcp remove <name>
+    if (action === 'remove') {
+      if (!serverName) {
+        this.showError('Usage: /mcp remove <server-name>')
+        return
+      }
+      this.handleMcpRemoveCommand(serverName)
+      return
+    }
+
+    this.showError(`Unknown /mcp action: ${action}. Usage: /mcp [enable|disable|reconnect|add|remove] <server-name>`)
+  }
+
+  private async handleMcpAddCommand(argsStr: string): Promise<void> {
+    const parts = argsStr.split(/\s+/).filter(Boolean)
+    // Skip 'add' prefix if present
+    const name = parts[0]
+    const command = parts[1]
+    const cmdArgs = parts.slice(2)
+
+    if (!name || !command) {
+      this.showError('Usage: /mcp add <name> <command> [args...]')
+      return
+    }
+
+    const serverConfig: McpServerConfig = {
+      type: 'stdio',
+      command,
+      args: cmdArgs,
+    }
+
+    try {
+      const configPath = await addMcpServer(name, serverConfig, 'project', process.cwd())
+      this.showStatus(`Added MCP server "${name}" to ${configPath}`)
+
+      // Connect the new server immediately
+      if (this.mcpClient) {
+        this.showStatus(`Connecting MCP server: ${name}...`)
+        await this.mcpClient.connectServer(name, serverConfig)
+        const server = this.mcpClient.getServer(name)
+        if (server?.status === 'connected') {
+          this.showStatus(`MCP server "${name}" connected with ${server.tools.length} tool(s)`)
+
+          // Inject MCP tools on agent state
+          const mcpTools = createMcpTools(this.mcpClient)
+          const resourceTools = [
+            createListMcpResourcesTool(this.mcpClient),
+            createReadMcpResourceTool(this.mcpClient),
+          ]
+          this.agent.state.tools = [...this.agent.state.tools, ...mcpTools, ...resourceTools]
+
+          // Rebuild system prompt with updated MCP info
+          this.rebuildSystemPrompt(this.mcpClient.getServerStates())
+        } else {
+          this.showError(`Failed to connect MCP server "${name}": ${server?.error ?? 'unknown error'}`)
+        }
+      }
+    } catch (error) {
+      this.showError(`Failed to add MCP server: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private async handleMcpRemoveCommand(name: string): Promise<void> {
+    try {
+      await removeMcpServer(name, 'project', process.cwd())
+      this.showStatus(`Removed MCP server "${name}" from config`)
+
+      // Disconnect if connected
+      if (this.mcpClient) {
+        this.mcpClient.setServerEnabled(name, false)
+      }
+    } catch (error) {
+      this.showError(`Failed to remove MCP server: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   private rebuildFooter(): void {
     const oldFooter = this.footer
-    this.footer = new FooterComponent(this.agent, this.config.model.id, this.config.provider, process.cwd())
+    this.footer = new FooterComponent(this.agent, this.config.model.id, this.config.provider, process.cwd(), this.agent.state.thinkingLevel)
     this.ui.removeChild(oldFooter)
     this.ui.addChild(this.footer)
     // Restore context usage on the new footer
@@ -613,6 +733,7 @@ export class App {
       cwd: process.cwd(),
       modelId: this.config.model.id,
       mcpServers,
+      skills: getSkills(this.agent),
     })
     this.agent.state.systemPrompt = sections.join('\n\n')
 
@@ -647,6 +768,285 @@ export class App {
     this.ui.requestRender()
   }
 
+  private handlePermissionCommand(args: string): void {
+    const mode = args.trim().toLowerCase() as PermissionMode
+
+    if (!mode) {
+      const current = this.permissionManager.getMode()
+      const ctx = this.permissionManager.getContext()
+      const sessionRules = ctx.allowRules.filter((r) => r.source === 'session')
+      const lines = [
+        theme.fg('accent', 'Permission Modes:'),
+        '',
+        `  ${theme.bold('default')}        Read: auto-allow | Write/Edit/Bash: prompt before execution`,
+        `  ${theme.bold('auto-approve')}   All tools execute without confirmation (YOLO mode)`,
+        `  ${theme.bold('plan')}           Read-only — all write/edit/bash operations are blocked`,
+        '',
+        `${theme.dim(`Current: ${current}`)}`,
+      ]
+      if (sessionRules.length > 0) {
+        lines.push('')
+        lines.push(theme.fg('accent', 'Session rules (allowed for this session):'))
+        for (const rule of sessionRules) {
+          const label = rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName
+          lines.push(`  ${theme.fg('green', '✓')} ${label}`)
+        }
+      }
+      lines.push('')
+      lines.push(theme.dim('Usage: /permission <mode>'))
+      for (const line of lines) {
+        this.chatContainer.addChild(new Text(line, 1, 0))
+      }
+      this.chatContainer.addChild(new Spacer(1))
+      this.ui.requestRender()
+      return
+    }
+
+    if (!PERMISSION_MODES.includes(mode)) {
+      this.showError(`Invalid permission mode: ${mode}. Valid modes: ${PERMISSION_MODES.join(', ')}`)
+      return
+    }
+
+    this.permissionManager.setMode(mode)
+    this.showStatus(`Permission mode set to: ${mode}`)
+  }
+
+  private static THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+  private static THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
+    off: 'No reasoning',
+    minimal: 'Very brief reasoning (~1k tokens)',
+    low: 'Light reasoning (~2k tokens)',
+    medium: 'Moderate reasoning (~8k tokens)',
+    high: 'Deep reasoning (~16k tokens)',
+    xhigh: 'Maximum reasoning (~32k tokens)',
+  }
+
+  private handleThinkingCommand(args: string): void {
+    const level = args.trim().toLowerCase() as ThinkingLevel
+
+    if (!level) {
+      const current = this.agent.state.thinkingLevel
+      const items: SelectItem[] = App.THINKING_LEVELS.map((l) => ({
+        value: l,
+        label: l,
+        description: App.THINKING_DESCRIPTIONS[l],
+      }))
+
+      const selectList = new SelectList(items, items.length, {
+        selectedPrefix: (text) => chalk.cyan(text),
+        selectedText: (text) => chalk.cyan(text),
+        description: (text) => theme.dim(text),
+        scrollInfo: (text) => theme.dim(text),
+        noMatch: (text) => theme.dim(text),
+      })
+
+      const thinkingLabel = theme.fg('accent', 'Select thinking level:')
+      this.chatContainer.addChild(new Text(thinkingLabel, 1, 0))
+      this.chatContainer.addChild(selectList)
+      this.ui.setFocus(selectList)
+      this.ui.requestRender()
+
+      let finished = false
+      const removeListener = this.ui.addInputListener((data) => {
+        if (data === '\x03') {
+          // Ctrl+C
+          finished = true
+          removeListener()
+          this.chatContainer.removeChild(selectList)
+          this.chatContainer.addChild(new Spacer(1))
+          this.ui.setFocus(this.editor)
+          this.ui.requestRender()
+          return { consume: true }
+        }
+        return undefined
+      })
+
+      const finish = (selectedLevel?: ThinkingLevel) => {
+        if (finished) return
+        finished = true
+        removeListener()
+        this.chatContainer.removeChild(selectList)
+
+        if (selectedLevel) {
+          this.agent.state.thinkingLevel = selectedLevel
+          this.footer.setThinkingLevel(selectedLevel)
+          this.showStatus(`Thinking level set to: ${selectedLevel}`)
+        }
+
+        this.chatContainer.addChild(new Spacer(1))
+        this.ui.setFocus(this.editor)
+        this.ui.requestRender()
+        // Resume spinner
+        this.showWorking()
+      }
+
+      selectList.onSelect = (item) => {
+        finish(item.value as ThinkingLevel)
+      }
+
+      selectList.onCancel = () => {
+        finish()
+      }
+
+      return
+    }
+
+    if (!App.THINKING_LEVELS.includes(level)) {
+      this.showError(`Invalid thinking level: ${level}. Valid levels: ${App.THINKING_LEVELS.join(', ')}`)
+      return
+    }
+
+    this.agent.state.thinkingLevel = level
+    this.footer.setThinkingLevel(level)
+    this.showStatus(`Thinking level set to: ${level}`)
+  }
+
+  private handleSkillsCommand(): void {
+    const skills = getSkills(this.agent)
+    const diagnostics = getSkillDiagnostics(this.agent)
+
+    if (skills.length === 0) {
+      this.chatContainer.addChild(
+        new Text(theme.dim('No skills loaded.'), 1, 0),
+      )
+      this.chatContainer.addChild(
+        new Text(theme.dim('Create SKILL.md files in ~/.microcode/skills/ or .microcode/skills/ to add skills.'), 1, 0),
+      )
+    } else {
+      this.chatContainer.addChild(
+        new Text(theme.fg('accent', `Available skills (${skills.length}):`), 1, 0),
+      )
+      this.chatContainer.addChild(new Spacer(1))
+
+      for (const skill of skills) {
+        const disabled = skill.disableModelInvocation ? theme.dim(' (disabled)') : ''
+        this.chatContainer.addChild(
+          new Text(`${theme.bold(skill.name)}${disabled}`, 1, 0),
+        )
+        this.chatContainer.addChild(
+          new Text(`  ${theme.dim(skill.description)}`, 1, 0),
+        )
+        this.chatContainer.addChild(
+          new Text(`  ${theme.dim(skill.filePath)}`, 1, 0),
+        )
+        this.chatContainer.addChild(new Spacer(1))
+      }
+    }
+
+    if (diagnostics.length > 0) {
+      this.chatContainer.addChild(
+        new Text(theme.fg('yellow', 'Skill diagnostics:'), 1, 0),
+      )
+      for (const diagnostic of diagnostics) {
+        this.chatContainer.addChild(
+          new Text(`  ${theme.dim(diagnostic)}`, 1, 0),
+        )
+      }
+      this.chatContainer.addChild(new Spacer(1))
+    }
+
+    this.chatContainer.addChild(new Spacer(1))
+    this.ui.requestRender()
+  }
+
+  /**
+   * Prompt user for tool permission using an inline select list in the chat area.
+   * Returns true if approved, false if denied.
+   */
+  async promptPermission(
+    toolName: string,
+    input: Record<string, unknown>,
+    description: string,
+  ): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      // Pause spinner while waiting for user decision
+      this.hideWorking()
+      this.permissionPromptActive = true
+
+      // Extract content for session rule matching
+      const ruleContent = this.extractRuleContent(toolName, input)
+      const sessionLabel = ruleContent ? `${toolName}(${ruleContent})` : toolName
+
+      const items: SelectItem[] = [
+        { value: 'allow', label: 'Allow', description: `Allow ${toolName} to execute` },
+        { value: 'allow-session', label: `Allow for session`, description: `Don't ask again for ${sessionLabel}` },
+        { value: 'deny', label: 'Deny', description: `Block ${toolName} execution` },
+      ]
+
+      const selectList = new SelectList(items, items.length, {
+        selectedPrefix: (text) => chalk.cyan(text),
+        selectedText: (text) => chalk.cyan(text),
+        description: (text) => theme.dim(text),
+        scrollInfo: (text) => theme.dim(text),
+        noMatch: (text) => theme.dim(text),
+      })
+
+      // Add inline to chat area
+      const permLabel = theme.fg('accent', 'Permission requested:')
+      this.chatContainer.addChild(new Text(`${permLabel} ${description}`, 1, 0))
+      this.chatContainer.addChild(selectList)
+      this.ui.setFocus(selectList)
+      this.ui.requestRender()
+
+      // Intercept Ctrl+C before it reaches SelectList — exit app instead of deny
+      let finished = false
+      const removeListener = this.ui.addInputListener((data) => {
+        if (data === '\x03') { // Ctrl+C
+          finished = true
+          removeListener()
+          this.permissionPromptActive = false
+          this.chatContainer.removeChild(selectList)
+          this.exit()
+          return { consume: true }
+        }
+        return undefined
+      })
+
+      const finish = (approved: boolean) => {
+        if (finished) return
+        finished = true
+        removeListener()
+        this.permissionPromptActive = false
+        this.chatContainer.removeChild(selectList)
+        const icon = approved ? theme.fg('green', '✓') : theme.fg('red', '✗')
+        const resultText = approved ? 'Approved' : 'Denied'
+        this.chatContainer.addChild(new Text(`${icon} ${resultText}`, 1, 0))
+        this.chatContainer.addChild(new Spacer(1))
+        // Resume spinner if approved - agent will continue responding
+        if (approved) this.showWorking()
+        // Restore focus to editor so user can type again
+        this.ui.setFocus(this.editor)
+        this.ui.requestRender()
+        resolve(approved)
+      }
+
+      selectList.onSelect = (item) => {
+        if (item.value === 'allow-session') {
+          this.permissionManager.addSessionRule(toolName, ruleContent)
+        }
+        finish(item.value === 'allow' || item.value === 'allow-session')
+      }
+      selectList.onCancel = () => finish(false)
+    })
+  }
+
+  private extractRuleContent(toolName: string, input: Record<string, unknown>): string | undefined {
+    switch (toolName) {
+      case 'bash':
+        return typeof input.command === 'string' ? input.command : undefined
+      case 'file_edit':
+      case 'file_write':
+      case 'file_read':
+        return typeof input.path === 'string' ? input.path : undefined
+      default:
+        return undefined
+    }
+  }
+
+  getPermissionManager(): PermissionManager {
+    return this.permissionManager
+  }
+
   private showHelp(): void {
     const helpText = [
       `${theme.fg('accent', 'Available Commands:')}`,
@@ -654,8 +1054,10 @@ export class App {
       `  ${theme.bold('/clear')}              Clear the conversation history`,
       `  ${theme.bold('/compact')} [instr.]    Compress conversation context`,
       `  ${theme.bold('/model')} [model-id]   Show current model or switch to a different model`,
-      `  ${theme.bold('/mcp')}                Show MCP server status and tools`,
+      `  ${theme.bold('/thinking')} [level]   Show or set thinking depth`,
+      `  ${theme.bold('/mcp')}                Manage MCP servers (add/remove/enable/disable)`,
       `  ${theme.bold('/session')} [list]     Show session info or list saved sessions`,
+      `  ${theme.bold('/permission')} [mode]  Show or switch permission mode`,
       `  ${theme.bold('/exit')}               Exit Microcode`,
       `  ${theme.bold('/help')}               Show this help message`,
       '',
@@ -785,6 +1187,9 @@ export class App {
           component.markExecutionStarted()
           this.chatContainer.addChild(component)
           this.pendingTools.set(event.toolCallId, component)
+          this.toolExecutionInProgress = true
+          // Ensure spinner is visible during tool execution
+          this.showWorking()
           this.ui.requestRender()
           break
         }
@@ -818,6 +1223,9 @@ export class App {
               component.updateDetails(event.result.details)
             }
             this.pendingTools.delete(event.toolCallId)
+            if (this.pendingTools.size === 0) {
+              this.toolExecutionInProgress = false
+            }
             this.updateContextUsage()
             this.footer.invalidate()
             this.ui.requestRender()
@@ -826,7 +1234,10 @@ export class App {
         }
 
         case 'turn_end':
-          this.hideWorking()
+          // Don't hide spinner if tools are still executing
+          if (!this.toolExecutionInProgress) {
+            this.hideWorking()
+          }
           if (event.message.role === 'assistant' && event.message.stopReason === 'aborted') {
             this.chatContainer.addChild(
               new Text(chalk.hex('#cc6666').bold('\nInterrupted\n'), 1, 0),

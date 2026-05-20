@@ -12,21 +12,27 @@ async function readJsonFile(path: string): Promise<any> {
   }
 }
 
+export function getUserConfigPath(): string {
+  return join(homedir(), '.microcode', 'mcp.json')
+}
+
+export function getProjectConfigPath(cwd: string): string {
+  return join(cwd, '.microcode', 'mcp.json')
+}
+
 export async function loadMcpConfig(
   cwd: string,
 ): Promise<Record<string, McpServerConfig>> {
   const configs: Record<string, McpServerConfig> = {}
 
   // Load user-level config
-  const userConfigPath = join(homedir(), '.microcode', 'mcp.json')
-  const userConfig = await readJsonFile(userConfigPath)
+  const userConfig = await readJsonFile(getUserConfigPath())
   if (userConfig?.mcpServers) {
     Object.assign(configs, userConfig.mcpServers)
   }
 
   // Load project-level config (overrides user)
-  const projectConfigPath = join(cwd, '.microcode', 'mcp.json')
-  const projectConfig = await readJsonFile(projectConfigPath)
+  const projectConfig = await readJsonFile(getProjectConfigPath(cwd))
   if (projectConfig?.mcpServers) {
     Object.assign(configs, projectConfig.mcpServers)
   }

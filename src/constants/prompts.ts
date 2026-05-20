@@ -1,6 +1,8 @@
 import { type as osType, version as osVersion, release as osRelease } from 'os'
 import { execSync } from 'child_process'
 import type { McpServerState } from '../mcp/types.ts'
+import type { Skill } from '../skill/skill.ts'
+import { formatSkillsForPrompt } from '../skill/skill.ts'
 
 declare const MACRO: {
   VERSION: string
@@ -193,16 +195,23 @@ ${toolList}
 When using MCP tools, pass the appropriate parameters as defined by the tool's schema. MCP tool results are returned as text content.${resourceSection}`
 }
 
+function getSkillsInstructionsSection(skills: Skill[] | undefined): string | null {
+  if (!skills || skills.length === 0) return null
+
+  return formatSkillsForPrompt(skills)
+}
+
 // --- Main system prompt builder ---
 
 export interface GetSystemPromptOptions {
   cwd: string
   modelId: string
   mcpServers?: McpServerState[]
+  skills?: Skill[]
 }
 
 export function getSystemPrompt(options: GetSystemPromptOptions): string[] {
-  const { cwd, modelId, mcpServers } = options
+  const { cwd, modelId, mcpServers, skills } = options
 
   return [
     // Static sections
@@ -216,5 +225,6 @@ export function getSystemPrompt(options: GetSystemPromptOptions): string[] {
     // Dynamic sections
     getEnvInfoSection(cwd, modelId),
     getMcpInstructionsSection(mcpServers),
+    getSkillsInstructionsSection(skills),
   ].filter((s): s is string => s !== null)
 }

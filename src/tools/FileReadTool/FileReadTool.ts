@@ -3,6 +3,9 @@ import { readFile, access } from 'fs/promises'
 import { constants } from 'fs'
 import { isAbsolute, resolve } from 'path'
 import { Type, type Static } from 'typebox'
+import type { PermissionBehavior } from '../../permissions/types.ts'
+
+export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'allow'
 
 const readSchema = Type.Object({
   file_path: Type.String({ description: 'Path to the file to read (relative or absolute)' }),

@@ -1,4 +1,4 @@
-import { Box, Container, Markdown, type MarkdownTheme, Text } from '@earendil-works/pi-tui'
+import { Container, Markdown, type MarkdownTheme, Spacer, Text } from '@earendil-works/pi-tui'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { getMarkdownTheme } from '../theme.ts'
 
@@ -7,15 +7,15 @@ import { getMarkdownTheme } from '../theme.ts'
  * Supports streaming updates via updateContent().
  */
 export class AssistantMessageComponent extends Container {
-  private contentBox: Box
+  private contentContainer: Container
   private markdownTheme: MarkdownTheme
   private lastText = ''
 
   constructor(markdownTheme: MarkdownTheme = getMarkdownTheme()) {
     super()
     this.markdownTheme = markdownTheme
-    this.contentBox = new Box(1, 0)
-    this.addChild(this.contentBox)
+    this.contentContainer = new Container()
+    this.addChild(this.contentContainer)
   }
 
   updateContent(message: AssistantMessage): void {
@@ -27,9 +27,9 @@ export class AssistantMessageComponent extends Container {
     if (text === this.lastText) return
     this.lastText = text
 
-    this.contentBox.clear()
+    this.contentContainer.clear()
     if (text.trim()) {
-      this.contentBox.addChild(new Markdown(text, 0, 0, this.markdownTheme))
+      this.contentContainer.addChild(new Markdown(text.trim(), 1, 0, this.markdownTheme))
     }
   }
 

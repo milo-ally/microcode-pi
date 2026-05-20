@@ -2,6 +2,9 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import { writeFile, mkdir, readFile } from 'fs/promises'
 import { dirname, isAbsolute, resolve } from 'path'
 import { Type, type Static } from 'typebox'
+import type { PermissionBehavior } from '../../permissions/types.ts'
+
+export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask'
 
 const writeSchema = Type.Object({
   file_path: Type.String({ description: 'Path to the file to write (relative or absolute)' }),

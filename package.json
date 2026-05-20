@@ -16,7 +16,8 @@
   "scripts": {
     "dev": "bun run ./src/bootstrapEntry.ts",
     "start": "bun run ./src/bootstrapEntry.ts",
-    "build": "bun build ./src/bootstrapEntry.ts --outdir=./dist --target=bun"
+    "build": "bun run build.ts",
+    "run": "node ./dist/bootstrapEntry.js"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.75.3",

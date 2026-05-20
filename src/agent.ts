@@ -1,25 +1,39 @@
-import { Agent, type AgentMessage } from '@earendil-works/pi-agent-core'
+import { Agent, type AgentMessage, type ThinkingLevel } from '@earendil-works/pi-agent-core'
 import { type Message, streamSimple } from '@earendil-works/pi-ai'
-import { resolveConfig, getApiKeyForProvider } from './config.ts'
+import { resolveConfig, getApiKeyForProvider, createModelForId } from './config.ts'
 import { createCodingTools } from './tools/index.ts'
 import { getSystemPrompt } from './constants/prompts.ts'
 import type { McpServerState } from './mcp/types.ts'
 import { CompactionManager, type CompactionProgress } from './session/CompactionManager.ts'
+import type { PermissionManager } from './permissions/index.ts'
+import { loadSkills, type Skill } from './skill/skill.ts'
 
 export interface CreateMicrocodeAgentOptions {
   cwd?: string
+  modelId?: string
+  thinkingLevel?: ThinkingLevel
   mcpServers?: McpServerState[]
   onCompactionProgress?: (progress: CompactionProgress) => void
+  permissionManager?: PermissionManager
+  skillPaths?: string[]
 }
 
 export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) {
   const cwd = options.cwd ?? process.cwd()
-  const config = resolveConfig()
+  const config = options.modelId ? createModelForId(options.modelId) : resolveConfig()
+
+  // Load skills
+  const skillsResult = loadSkills({
+    cwd,
+    skillPaths: options.skillPaths ?? [],
+    includeDefaults: true,
+  })
 
   const systemPromptSections = getSystemPrompt({
     cwd,
     modelId: config.model.id,
     mcpServers: options.mcpServers,
+    skills: skillsResult.skills,
   })
 
   const compactionManager = new CompactionManager({
@@ -32,8 +46,16 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
     initialState: {
       systemPrompt: systemPromptSections.join('\n\n'),
       model: config.model,
-      tools: createCodingTools(cwd),
+      tools: createCodingTools({
+        cwd,
+        getSkills: () => skillsResult.skills,
+      }),
     },
+    beforeToolCall: options.permissionManager
+      ? async (ctx, signal) => {
+          return options.permissionManager!.checkPermissionWithPrompt(ctx)
+        }
+      : undefined,
     streamFn: async (model, context, opts) => {
       const apiKey = getApiKeyForProvider(model.provider) ?? config.apiKey
       return streamSimple(model, context, {
@@ -60,8 +82,17 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
     },
   })
 
+  // Set thinking level if provided
+  if (options.thinkingLevel) {
+    agent.state.thinkingLevel = options.thinkingLevel
+  }
+
   // Attach compactionManager to agent for external access
   ;(agent as any).__compactionManager = compactionManager
+
+  // Attach skills to agent for external access
+  ;(agent as any).__skills = skillsResult.skills
+  ;(agent as any).__skillDiagnostics = skillsResult.diagnostics
 
   return agent
 }
@@ -71,6 +102,20 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
  */
 export function getCompactionManager(agent: Agent): CompactionManager | undefined {
   return (agent as any).__compactionManager
+}
+
+/**
+ * Get the skills attached to an agent.
+ */
+export function getSkills(agent: Agent): Skill[] {
+  return (agent as any).__skills ?? []
+}
+
+/**
+ * Get the skill diagnostics attached to an agent.
+ */
+export function getSkillDiagnostics(agent: Agent): string[] {
+  return (agent as any).__skillDiagnostics ?? []
 }
 
 export function convertToLlm(messages: AgentMessage[]): Message[] {

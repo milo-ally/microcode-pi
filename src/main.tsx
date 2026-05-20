@@ -3,14 +3,174 @@ import { createMicrocodeAgent } from './agent.ts'
 import { App } from './tui/app.ts'
 import { McpClientManager } from './mcp/client.ts'
 import { loadMcpConfig, isMcpConfigEmpty } from './mcp/config.ts'
+import { addMcpServer, removeMcpServer, listMcpServers, parseEnvVars, parseHeaders, type ConfigScope } from './mcp/configWrite.ts'
+import type { McpServerConfig } from './mcp/types.ts'
 import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool } from './tools/index.ts'
 import { SessionManager } from './session/SessionManager.ts'
+import { PermissionManager, type PermissionMode, PERMISSION_MODES } from './permissions/index.ts'
 
 declare const MACRO: {
   VERSION: string
 }
 
+function parseFlag(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag)
+  if (idx === -1) return undefined
+  const val = args[idx + 1]
+  if (!val || val.startsWith('-')) return undefined
+  return val
+}
+
+function collectFlagValues(args: string[], flag: string): string[] {
+  const values: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag && args[i + 1] && !args[i + 1].startsWith('-')) {
+      values.push(args[i + 1])
+    }
+  }
+  return values
+}
+
+function filterFlags(args: string[]): string[] {
+  const result: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('-')) {
+      // Skip flag and its value (if next arg doesn't start with -)
+      if (args[i + 1] && !args[i + 1].startsWith('-')) {
+        i++ // skip value too
+      }
+      continue
+    }
+    result.push(args[i])
+  }
+  return result
+}
+
+async function handleMcpAdd(args: string[]): Promise<void> {
+  const scope = (parseFlag(args, '--scope') ?? 'project') as ConfigScope
+  const transport = parseFlag(args, '--transport') ?? 'stdio'
+  const envVars = collectFlagValues(args, '-e')
+  const headerValues = collectFlagValues(args, '--header')
+
+  const positional = filterFlags(args)
+  const name = positional[0]
+  const commandOrUrl = positional[1]
+  const remainingArgs = positional.slice(2)
+
+  if (!name) {
+    console.error('Error: Server name is required.')
+    console.log('Usage: microcode mcp add <name> <command> [args...]')
+    console.log('       microcode mcp add --transport sse <name> <url>')
+    process.exit(1)
+  }
+
+  if (!commandOrUrl) {
+    console.error('Error: Command or URL is required.')
+    console.log('Usage: microcode mcp add <name> <command> [args...]')
+    process.exit(1)
+  }
+
+  if (scope !== 'user' && scope !== 'project') {
+    console.error(`Invalid scope: ${scope}. Must be 'user' or 'project'.`)
+    process.exit(1)
+  }
+
+  if (transport !== 'stdio' && transport !== 'sse' && transport !== 'http') {
+    console.error(`Invalid transport: ${transport}. Must be 'stdio', 'sse', or 'http'.`)
+    process.exit(1)
+  }
+
+  let serverConfig: McpServerConfig
+  let description: string
+
+  if (transport === 'sse') {
+    const headers = headerValues.length > 0 ? parseHeaders(headerValues) : undefined
+    serverConfig = { type: 'sse', url: commandOrUrl, headers }
+    description = `SSE server at ${commandOrUrl}`
+  } else if (transport === 'http') {
+    const headers = headerValues.length > 0 ? parseHeaders(headerValues) : undefined
+    serverConfig = { type: 'http', url: commandOrUrl, headers }
+    description = `HTTP server at ${commandOrUrl}`
+  } else {
+    const env = envVars.length > 0 ? parseEnvVars(envVars) : undefined
+    serverConfig = { type: 'stdio', command: commandOrUrl, args: remainingArgs, env }
+    description = `stdio server: ${commandOrUrl} ${remainingArgs.join(' ')}`.trim()
+  }
+
+  try {
+    const configPath = await addMcpServer(name, serverConfig, scope, process.cwd())
+    console.log(`Added MCP server "${name}" (${description})`)
+    console.log(`Config: ${configPath}`)
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
+}
+
+async function handleMcpRemove(args: string[]): Promise<void> {
+  const scope = (parseFlag(args, '--scope') ?? 'project') as ConfigScope
+  const positional = filterFlags(args)
+  const name = positional[0]
+
+  if (!name) {
+    console.error('Error: Server name is required.')
+    console.log('Usage: microcode mcp remove <name> [--scope user|project]')
+    process.exit(1)
+  }
+
+  try {
+    const configPath = await removeMcpServer(name, scope, process.cwd())
+    console.log(`Removed MCP server "${name}" from ${scope} config`)
+    console.log(`Config: ${configPath}`)
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
+}
+
+async function handleMcpList(args: string[]): Promise<void> {
+  const scope = (parseFlag(args, '--scope') ?? 'all') as ConfigScope | 'all'
+
+  try {
+    const servers = await listMcpServers(scope, process.cwd())
+
+    if (servers.length === 0) {
+      console.log('No MCP servers configured.')
+      return
+    }
+
+    console.log('Configured MCP servers:\n')
+    for (const { scope: s, name, config } of servers) {
+      let typeDesc: string
+      if (config.type === 'sse') {
+        typeDesc = `sse → ${config.url}`
+      } else if (config.type === 'http') {
+        typeDesc = `http → ${config.url}`
+      } else if (config.type === 'ws') {
+        typeDesc = `ws → ${config.url}`
+      } else {
+        typeDesc = `stdio → ${config.command} ${(config.args ?? []).join(' ')}`.trim()
+      }
+      console.log(`  ${name} [${s}]`)
+      console.log(`    ${typeDesc}`)
+    }
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
+}
+
 async function main(): Promise<void> {
+  // Set process title for better visibility in process lists
+  try {
+    // Try to set process title (may be limited on some platforms)
+    process.title = 'microcode'
+    // Also set argv0 if possible
+    process.argv0 = 'microcode'
+  } catch {
+    // process.title may not be supported on all platforms
+  }
+
   const args = process.argv.slice(2)
 
   // Handle --version/-v
@@ -26,11 +186,30 @@ Microcode - AI-powered coding assistant
 
 Usage:
   microcode [options] [prompt]
+  microcode mcp add <name> <command> [args...]
+  microcode mcp remove <name>
+  microcode mcp list
 
 Options:
-  --version, -v    Show version
-  --help, -h       Show this help
-  --resume [id]    Resume a session (last session if no id given)
+  --version, -v              Show version
+  --help, -h                 Show this help
+  --resume [id]              Resume a session (last session if no id given)
+  --permission-mode <mode>   Set permission mode: default, auto-approve, plan
+  --model <model-id>         Override the model (e.g., claude-sonnet-4-20250514)
+  --thinking <level>         Set thinking depth: off, minimal, low, medium, high, xhigh
+
+MCP Commands:
+  mcp add <name> <command> [args...]     Add a stdio MCP server
+  mcp add --transport sse <name> <url>   Add an SSE MCP server
+  mcp add --transport http <name> <url>  Add an HTTP MCP server
+  mcp remove <name>                      Remove an MCP server
+  mcp list                               List configured MCP servers
+
+  Options for mcp add:
+    --scope <user|project>     Config scope (default: project)
+    --transport <stdio|sse|http>  Transport type (default: stdio)
+    -e KEY=value               Set environment variables
+    --header "Key: Value"      Set headers for SSE/HTTP
 
 Environment Variables:
   ANTHROPIC_API_KEY     Anthropic API key
@@ -48,6 +227,7 @@ Environment Variables:
 MCP Configuration:
   Place mcp.json in ~/.microcode/ (user) or .microcode/ (project)
   with a "mcpServers" key containing server definitions.
+  Or use 'microcode mcp add' to add servers from the command line.
 
 Session Management:
   Sessions are automatically saved to ~/.microcode/sessions/
@@ -55,6 +235,27 @@ Session Management:
   Use /compact to manually compress conversation context.
 `)
     process.exit(0)
+  }
+
+  // Handle mcp subcommands: microcode mcp add/remove/list ...
+  if (args[0] === 'mcp') {
+    const subcommand = args[1]
+    const mcpArgs = args.slice(2)
+
+    if (subcommand === 'add') {
+      await handleMcpAdd(mcpArgs)
+      process.exit(0)
+    } else if (subcommand === 'remove') {
+      await handleMcpRemove(mcpArgs)
+      process.exit(0)
+    } else if (subcommand === 'list') {
+      await handleMcpList(mcpArgs)
+      process.exit(0)
+    } else {
+      console.error(`Unknown mcp subcommand: ${subcommand}`)
+      console.log('Usage: microcode mcp add|remove|list [options] [args...]')
+      process.exit(1)
+    }
   }
 
   const cwd = process.cwd()
@@ -67,6 +268,45 @@ Session Management:
         : undefined)
     : undefined
   const filteredArgs = args.filter((a) => !a.startsWith('-'))
+
+  // Parse --permission-mode flag
+  const permModeIdx = args.indexOf('--permission-mode')
+  let permissionMode: PermissionMode | undefined
+  if (permModeIdx !== -1) {
+    const modeArg = args[permModeIdx + 1]?.toLowerCase()
+    if (modeArg && PERMISSION_MODES.includes(modeArg as PermissionMode)) {
+      permissionMode = modeArg as PermissionMode
+    } else {
+      console.error(`Invalid permission mode: ${modeArg}. Valid modes: ${PERMISSION_MODES.join(', ')}`)
+      process.exit(1)
+    }
+  }
+
+  // Parse --model flag
+  const modelIdx = args.indexOf('--model')
+  let modelId: string | undefined
+  if (modelIdx !== -1) {
+    modelId = args[modelIdx + 1]
+    if (!modelId || modelId.startsWith('-')) {
+      console.error('Missing model ID after --model')
+      process.exit(1)
+    }
+  }
+
+  // Parse --thinking flag
+  const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+  type ThinkingLevel = (typeof THINKING_LEVELS)[number]
+  const thinkingIdx = args.indexOf('--thinking')
+  let thinkingLevel: ThinkingLevel | undefined
+  if (thinkingIdx !== -1) {
+    const levelArg = args[thinkingIdx + 1]?.toLowerCase()
+    if (levelArg && THINKING_LEVELS.includes(levelArg as ThinkingLevel)) {
+      thinkingLevel = levelArg as ThinkingLevel
+    } else {
+      console.error(`Invalid thinking level: ${levelArg}. Valid levels: ${THINKING_LEVELS.join(', ')}`)
+      process.exit(1)
+    }
+  }
 
   // Create session manager
   const sessionManager = new SessionManager()
@@ -105,9 +345,12 @@ Session Management:
     await sessionManager.create(cwd)
   }
 
+  // Create permission manager
+  const permissionManager = new PermissionManager({ mode: permissionMode })
+
   // Create MCP client and agent without waiting for MCP servers
   const mcpClient = new McpClientManager()
-  const agent = createMicrocodeAgent({ cwd })
+  const agent = createMicrocodeAgent({ cwd, modelId, thinkingLevel, permissionManager })
 
   // Restore messages if resuming
   if (restoredMessages && restoredMessages.length > 0) {
@@ -115,7 +358,12 @@ Session Management:
   }
 
   // Create TUI app (REPL starts immediately)
-  const app = new App(agent, mcpClient, sessionManager)
+  const app = new App(agent, mcpClient, sessionManager, permissionManager, modelId, thinkingLevel)
+
+  // Wire permission prompt to TUI
+  permissionManager.setOnPermissionRequest(
+    (toolName, input, description) => app.promptPermission(toolName, input, description),
+  )
 
   // Handle exit from TUI (Ctrl+C, Ctrl+D, Escape)
   app.onExit = async () => {
