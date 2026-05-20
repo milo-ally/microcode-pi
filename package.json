@@ -1,0 +1,34 @@
+{
+  "name": "microcode",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An AI-powered coding assistant CLI, inspired by Microcode.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "bun@1.3.5",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "engines": {
+    "bun": ">=1.3.5"
+  },
+  "scripts": {
+    "dev": "bun run ./src/bootstrapEntry.ts",
+    "start": "bun run ./src/bootstrapEntry.ts",
+    "build": "bun build ./src/bootstrapEntry.ts --outdir=./dist --target=bun"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.75.3",
+    "@earendil-works/pi-ai": "^0.75.3",
+    "@earendil-works/pi-tui": "^0.75.3",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "chalk": "^5.5.0",
+    "diff": "^9.0.0",
+    "typebox": "^1.1.24"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "bun-types": "^1.3.14"
+  }
+}
