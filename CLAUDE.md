@@ -432,12 +432,16 @@ initialTools = [...coreTools, toolSearchTool]       // 5-6 tools total
 
 The system prompt includes an `<available-deferred-tools>` section listing all deferred tool names (without schemas).
 
-**Phase 2 — On-demand injection** (`agent.ts:99-106`):
+**Phase 2 — On-demand injection** (`agent.ts:99-109`):
 
 ```typescript
 afterToolCall: async (ctx) => {
   if (ctx.toolCall.name === 'tool_search' && pendingDiscoveredTools.length > 0) {
-    agent.state.tools = [...agent.state.tools, ...pendingDiscoveredTools]
+    const newTools = pendingDiscoveredTools
+    pendingDiscoveredTools = []
+    // Update both agent.state.tools AND context.tools so the next API call sees them
+    agent.state.tools = [...agent.state.tools, ...newTools]
+    ctx.context.tools = [...(ctx.context.tools ?? []), ...newTools]
   }
 }
 ```
@@ -445,11 +449,11 @@ afterToolCall: async (ctx) => {
 Critical timing:
 1. Model calls `tool_search({ query: "select:mcp__slack__send" })`
 2. `ToolSearchTool.execute()` runs → calls `onToolsDiscovered` callback → tool instance stored in `pendingDiscoveredTools`
-3. `afterToolCall` hook fires → injects new tools into `agent.state.tools`
+3. `afterToolCall` hook fires → injects new tools into both `agent.state.tools` and `ctx.context.tools`
 4. Model sees ToolSearchTool's return value (containing full schema as text)
-5. **Next turn**, the API request already includes the new tool's schema → model can call it directly
+5. **Same turn**, the next API request already includes the new tool's schema → model can call it directly
 
-`agent.state.tools` is a setter that copies the array on assignment, so the change takes effect on the next API call.
+Both `agent.state.tools` and `ctx.context.tools` must be updated: the former for external state consistency, the latter because the agent loop reads tools from its local context snapshot for subsequent API calls within the same run.
 
 ## Permission Layer — `PermissionManager`
 

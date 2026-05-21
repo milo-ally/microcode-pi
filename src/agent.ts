@@ -101,7 +101,9 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
       if (ctx.toolCall.name === TOOL_SEARCH_TOOL_NAME && pendingDiscoveredTools.length > 0) {
         const newTools = pendingDiscoveredTools
         pendingDiscoveredTools = []
+        // Update both agent.state.tools AND context.tools so the next API call sees them
         agent.state.tools = [...agent.state.tools, ...newTools]
+        ctx.context.tools = [...(ctx.context.tools ?? []), ...newTools]
       }
       return undefined
     },

@@ -48,6 +48,7 @@ export class McpClientManager {
           command: stdioConfig.command,
           args: stdioConfig.args ?? [],
           env: stdioConfig.env,
+          stderr: 'ignore',
         })
       }
 
