@@ -10,16 +10,15 @@ AI-powered coding assistant for the terminal.
 
 ```bash
 bun install
-bun run build.ts
+bun run build
 ```
 
-This builds the project and installs a `microcode` wrapper to `~/.local/bin`.
+This compiles a standalone `microcode` executable (no runtime dependency) and installs it to:
 
-If `~/.local/bin` is not in your PATH, add it:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
+| Platform | Install path | Available immediately? |
+|---|---|---|
+| Linux / macOS | `~/.local/bin/microcode` | Yes (`~/.local/bin` is in PATH by default) |
+| Windows | `%LOCALAPPDATA%\microcode\microcode.exe` | Depends — if not in PATH, restart your terminal after build |
 
 ## Usage
 
