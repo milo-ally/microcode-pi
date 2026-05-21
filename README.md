@@ -27,9 +27,6 @@ export PATH="$HOME/.local/bin:$PATH"
 # Start a new session
 microcode
 
-# Start with an initial prompt
-microcode "explain this codebase"
-
 # Resume the last session for this directory
 microcode --resume
 
