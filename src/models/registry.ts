@@ -42,7 +42,7 @@ const MODELS: Model<Api>[] = [
     contextWindow: 1000000,
     maxTokens: 384000,
   },
-  // --- opencode-go provider ---
+  // --- xiaomimimo provider ---
   {
     id: 'mimo-v2.5',
     name: 'MiMo V2.5',
