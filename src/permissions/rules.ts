@@ -10,34 +10,26 @@
  */
 
 import type { PermissionRule, PermissionRuleValue } from './types.ts'
+import { getToolDefinition } from '../tools/registry.ts'
 
 /**
  * Extract the content string from tool input for pattern matching.
- * Different tools have different "content" fields:
- * - bash: command string
- * - file_edit: file path
- * - file_write: file path
- * - file_read: file path
- * - MCP tools: first string argument
+ * Uses the tool registry's extractMatchContent if available,
+ * otherwise falls back to scanning common fields.
  */
 export function extractContentForMatching(
   toolName: string,
   input: Record<string, unknown>,
 ): string | undefined {
-  switch (toolName) {
-    case 'bash':
-      return typeof input.command === 'string' ? input.command : undefined
-    case 'file_edit':
-    case 'file_write':
-    case 'file_read':
-      return typeof input.path === 'string' ? input.path : undefined
-    default:
-      // For MCP and unknown tools, try common fields
-      for (const key of ['command', 'path', 'input', 'query', 'content']) {
-        if (typeof input[key] === 'string') return input[key]
-      }
-      return undefined
+  const def = getToolDefinition(toolName)
+  if (def?.extractMatchContent) {
+    return def.extractMatchContent(input)
   }
+  // For MCP and unknown tools, try common fields
+  for (const key of ['command', 'path', 'input', 'query', 'content']) {
+    if (typeof input[key] === 'string') return input[key]
+  }
+  return undefined
 }
 
 /**

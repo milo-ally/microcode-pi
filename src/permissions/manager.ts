@@ -8,6 +8,7 @@
  */
 
 import type { BeforeToolCallContext, BeforeToolCallResult } from '@earendil-works/pi-agent-core'
+import { getToolDefinition } from '../tools/registry.ts'
 import { matchRule, parseRuleString, ruleValueToString } from './rules.ts'
 import type {
   PermissionBehavior,
@@ -218,17 +219,10 @@ export class PermissionManager {
     toolName: string,
     input: Record<string, unknown>,
   ): string {
-    switch (toolName) {
-      case 'bash':
-        return typeof input.command === 'string' ? input.command : '(unknown command)'
-      case 'file_edit':
-        return typeof input.path === 'string' ? `edit ${input.path}` : '(unknown file)'
-      case 'file_write':
-        return typeof input.path === 'string' ? `write ${input.path}` : '(unknown file)'
-      case 'file_read':
-        return typeof input.path === 'string' ? `read ${input.path}` : '(unknown file)'
-      default:
-        return `${toolName}(${JSON.stringify(input).slice(0, 100)})`
+    const def = getToolDefinition(toolName)
+    if (def?.formatDescription) {
+      return def.formatDescription(input)
     }
+    return `${toolName}(${JSON.stringify(input).slice(0, 100)})`
   }
 }

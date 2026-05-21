@@ -43,7 +43,6 @@ function getShellInfoLine(): string {
 
 function getIntroSection(): string {
   return `You are Microcode, an AI-powered coding assistant. You help users write, edit, and understand code.
-
 You have access to tools that let you execute shell commands, read files, write files, and edit files. Use these tools to accomplish the user's tasks effectively and safely.`
 }
 
@@ -201,6 +200,17 @@ function getSkillsInstructionsSection(skills: Skill[] | undefined): string | nul
   return formatSkillsForPrompt(skills)
 }
 
+function getDeferredToolsSection(deferredToolNames: string[] | undefined): string | null {
+  if (!deferredToolNames || deferredToolNames.length === 0) return null
+
+  const toolList = deferredToolNames.map(name => `- ${name}`).join('\n')
+
+  return `<available-deferred-tools>
+The following tools are available but not loaded. Use ToolSearchTool to fetch their full schema before calling them:
+${toolList}
+</available-deferred-tools>`
+}
+
 // --- Main system prompt builder ---
 
 export interface GetSystemPromptOptions {
@@ -208,10 +218,12 @@ export interface GetSystemPromptOptions {
   modelId: string
   mcpServers?: McpServerState[]
   skills?: Skill[]
+  /** Names of tools that are deferred (discovered via ToolSearchTool). */
+  deferredToolNames?: string[]
 }
 
 export function getSystemPrompt(options: GetSystemPromptOptions): string[] {
-  const { cwd, modelId, mcpServers, skills } = options
+  const { cwd, modelId, mcpServers, skills, deferredToolNames } = options
 
   return [
     // Static sections
@@ -226,5 +238,6 @@ export function getSystemPrompt(options: GetSystemPromptOptions): string[] {
     getEnvInfoSection(cwd, modelId),
     getMcpInstructionsSection(mcpServers),
     getSkillsInstructionsSection(skills),
+    getDeferredToolsSection(deferredToolNames),
   ].filter((s): s is string => s !== null)
 }

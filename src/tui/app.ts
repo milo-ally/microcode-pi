@@ -16,6 +16,7 @@ import {
 } from '@earendil-works/pi-tui'
 import chalk from 'chalk'
 import { resolveConfig, createModelForId, type ResolvedConfig } from '../config.ts'
+import { getAllModels } from '../models/index.ts'
 import { getSystemPrompt } from '../constants/prompts.ts'
 import { theme, getEditorTheme, getMarkdownTheme, getBashModeBorderColor } from './theme.ts'
 import { MicrocodeEditor } from './components/microcodeEditor.ts'
@@ -23,16 +24,14 @@ import { FooterComponent } from './components/footer.ts'
 import { AssistantMessageComponent } from './components/assistantMessage.ts'
 import { ToolExecutionComponent } from './components/toolExecution.ts'
 import { BashExecutionComponent } from './components/bashExecution.ts'
-import { FileEditToolUI } from '../tools/FileEditTool/UI.tsx'
-import { FileWriteToolUI } from '../tools/FileWriteTool/UI.tsx'
-import { FileReadToolUI } from '../tools/FileReadTool/UI.tsx'
+import { getToolUIConstructor, type ToolUIComponent } from '../tools/registry.ts'
 import { UserMessage } from './components/userMessage.ts'
 import type { McpClientManager } from '../mcp/client.ts'
 import type { McpServerState, McpServerConfig } from '../mcp/types.ts'
 import { addMcpServer, removeMcpServer, type ConfigScope } from '../mcp/configWrite.ts'
 import { SessionManager } from '../session/SessionManager.ts'
 import { getCompactionManager, getSkills, getSkillDiagnostics } from '../agent.ts'
-import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool } from '../tools/index.ts'
+import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool, registerMcpToolsAsDeferred, getDeferredToolNames } from '../tools/index.ts'
 import { PermissionManager, type PermissionMode, PERMISSION_MODES } from '../permissions/index.ts'
 
 declare const MACRO: {
@@ -66,7 +65,7 @@ export class App {
   private isInitialized = false
   private streamingComponent?: AssistantMessageComponent
   private streamingMessage?: AssistantMessage
-  private pendingTools = new Map<string, ToolExecutionComponent | FileEditToolUI | FileWriteToolUI | FileReadToolUI>()
+  private pendingTools = new Map<string, ToolUIComponent>()
   private toolExecutionInProgress = false // Track if any tool is currently executing
   private loadingAnimation?: Loader
   private lastSigintTime = 0
@@ -521,44 +520,82 @@ export class App {
   }
 
   private handleModelCommand(searchTerm?: string): void {
-    if (!searchTerm) {
-      // Show current model info
-      this.chatContainer.addChild(
-        new Text(`${theme.fg('accent', 'Current model:')} ${this.config.model.id}`, 1, 0),
-      )
-      this.chatContainer.addChild(
-        new Text(`${theme.fg('accent', 'Provider:')} ${this.config.provider}`, 1, 0),
-      )
-      this.chatContainer.addChild(
-        new Text(theme.dim('Usage: /model <model-id> to switch models'), 1, 0),
-      )
-      this.chatContainer.addChild(
-        new Text(theme.dim('Example: /model claude-sonnet-4-20250514'), 1, 0),
-      )
-      this.chatContainer.addChild(new Spacer(1))
-      this.ui.requestRender()
+    if (searchTerm?.trim()) {
+      // Direct switch by model ID (e.g. /model deepseek-v4-pro)
+      this.switchModel(searchTerm.trim())
       return
     }
 
-    // Validate model ID (basic check)
-    const trimmedSearch = searchTerm.trim()
-    if (!trimmedSearch) {
-      this.showError('Model ID cannot be empty')
-      return
-    }
+    // Show selectable model list
+    const models = getAllModels()
+    const currentId = this.config.model.id
 
-    // Try to switch model
-    try {
-      const { model, apiKey, provider } = createModelForId(trimmedSearch)
+    const items: SelectItem[] = models.map((m) => ({
+      value: m.id,
+      label: m.name ?? m.id,
+      description: `provider: ${m.provider}${m.id === currentId ? ' (current)' : ''}`,
+    }))
 
-      // Validate provider type
-      if (provider !== 'anthropic' && provider !== 'openai' && provider !== 'custom') {
-        this.showError(`Invalid provider: ${provider}`)
-        return
+    const selectList = new SelectList(items, items.length, {
+      selectedPrefix: (text) => chalk.cyan(text),
+      selectedText: (text) => chalk.cyan(text),
+      description: (text) => theme.dim(text),
+      scrollInfo: (text) => theme.dim(text),
+      noMatch: (text) => theme.dim(text),
+    })
+
+    const label = theme.fg('accent', 'Select model:')
+    this.chatContainer.addChild(new Text(label, 1, 0))
+    this.chatContainer.addChild(selectList)
+    this.ui.setFocus(selectList)
+    this.ui.requestRender()
+
+    let finished = false
+    const removeListener = this.ui.addInputListener((data) => {
+      if (data === '\x03') {
+        // Ctrl+C
+        finished = true
+        removeListener()
+        this.chatContainer.removeChild(selectList)
+        this.chatContainer.addChild(new Spacer(1))
+        this.ui.setFocus(this.editor)
+        this.ui.requestRender()
+        return { consume: true }
+      }
+      return undefined
+    })
+
+    const finish = (selectedModelId?: string) => {
+      if (finished) return
+      finished = true
+      removeListener()
+      this.chatContainer.removeChild(selectList)
+
+      if (selectedModelId) {
+        this.switchModel(selectedModelId)
       }
 
+      this.chatContainer.addChild(new Spacer(1))
+      this.ui.setFocus(this.editor)
+      this.ui.requestRender()
+    }
+
+    selectList.onSelect = (item) => {
+      finish(item.value)
+    }
+
+    selectList.onCancel = () => {
+      finish()
+    }
+  }
+
+  /** Switch to a model by ID and update all dependent state. */
+  private switchModel(modelId: string): void {
+    try {
+      const { model, apiKey, provider } = createModelForId(modelId)
+
       this.agent.state.model = model
-      this.config = { model, apiKey, provider: provider as ResolvedConfig['provider'] }
+      this.config = { model, apiKey, provider }
 
       // Update compaction manager with new model and API key
       const compactionManager = getCompactionManager(this.agent)
@@ -573,7 +610,7 @@ export class App {
       // Rebuild footer with new model info
       this.rebuildFooter()
 
-      this.showStatus(`Model switched to: ${model.id}`)
+      this.showStatus(`Model switched to: ${model.id} (${provider})`)
     } catch (error) {
       this.showError(error instanceof Error ? error.message : String(error))
     }
@@ -747,15 +784,17 @@ export class App {
         if (server?.status === 'connected') {
           this.showStatus(`MCP server "${name}" connected with ${server.tools.length} tool(s)`)
 
-          // Inject MCP tools on agent state
-          const mcpTools = createMcpTools(this.mcpClient)
+          // Register MCP tools as deferred (discovered via ToolSearchTool)
+          registerMcpToolsAsDeferred(this.mcpClient)
+
+          // Inject resource tools directly (they're always needed)
           const resourceTools = [
             createListMcpResourcesTool(this.mcpClient),
             createReadMcpResourceTool(this.mcpClient),
           ]
-          this.agent.state.tools = [...this.agent.state.tools, ...mcpTools, ...resourceTools]
+          this.agent.state.tools = [...this.agent.state.tools, ...resourceTools]
 
-          // Rebuild system prompt with updated MCP info
+          // Rebuild system prompt with updated MCP info and deferred tool names
           this.rebuildSystemPrompt(this.mcpClient.getServerStates())
         } else {
           this.showError(`Failed to connect MCP server "${name}": ${server?.error ?? 'unknown error'}`)
@@ -791,11 +830,13 @@ export class App {
   }
 
   private rebuildSystemPrompt(mcpServers?: McpServerState[]): void {
+    const deferredToolNames = getDeferredToolNames()
     const sections = getSystemPrompt({
       cwd: process.cwd(),
       modelId: this.config.model.id,
       mcpServers,
       skills: getSkills(this.agent),
+      deferredToolNames: deferredToolNames.length > 0 ? deferredToolNames : undefined,
     })
     this.agent.state.systemPrompt = sections.join('\n\n')
 
@@ -830,37 +871,75 @@ export class App {
     this.ui.requestRender()
   }
 
+  private static PERMISSION_DESCRIPTIONS: Record<PermissionMode, string> = {
+    'default': 'Read: auto-allow | Write/Edit/Bash: prompt before execution',
+    'auto-approve': 'All tools execute without confirmation (YOLO mode)',
+    'plan': 'Read-only — all write/edit/bash operations are blocked',
+  }
+
   private handlePermissionCommand(args: string): void {
     const mode = args.trim().toLowerCase() as PermissionMode
 
     if (!mode) {
       const current = this.permissionManager.getMode()
-      const ctx = this.permissionManager.getContext()
-      const sessionRules = ctx.allowRules.filter((r) => r.source === 'session')
-      const lines = [
-        theme.fg('accent', 'Permission Modes:'),
-        '',
-        `  ${theme.bold('default')}        Read: auto-allow | Write/Edit/Bash: prompt before execution`,
-        `  ${theme.bold('auto-approve')}   All tools execute without confirmation (YOLO mode)`,
-        `  ${theme.bold('plan')}           Read-only — all write/edit/bash operations are blocked`,
-        '',
-        `${theme.dim(`Current: ${current}`)}`,
-      ]
-      if (sessionRules.length > 0) {
-        lines.push('')
-        lines.push(theme.fg('accent', 'Session rules (allowed for this session):'))
-        for (const rule of sessionRules) {
-          const label = rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName
-          lines.push(`  ${theme.fg('green', '✓')} ${label}`)
-        }
-      }
-      lines.push('')
-      lines.push(theme.dim('Usage: /permission <mode>'))
-      for (const line of lines) {
-        this.chatContainer.addChild(new Text(line, 1, 0))
-      }
-      this.chatContainer.addChild(new Spacer(1))
+      const items: SelectItem[] = PERMISSION_MODES.map((m) => ({
+        value: m,
+        label: m,
+        description: `${App.PERMISSION_DESCRIPTIONS[m]}${m === current ? ' (current)' : ''}`,
+      }))
+
+      const selectList = new SelectList(items, items.length, {
+        selectedPrefix: (text) => chalk.cyan(text),
+        selectedText: (text) => chalk.cyan(text),
+        description: (text) => theme.dim(text),
+        scrollInfo: (text) => theme.dim(text),
+        noMatch: (text) => theme.dim(text),
+      })
+
+      const label = theme.fg('accent', 'Select permission mode:')
+      this.chatContainer.addChild(new Text(label, 1, 0))
+      this.chatContainer.addChild(selectList)
+      this.ui.setFocus(selectList)
       this.ui.requestRender()
+
+      let finished = false
+      const removeListener = this.ui.addInputListener((data) => {
+        if (data === '\x03') {
+          finished = true
+          removeListener()
+          this.chatContainer.removeChild(selectList)
+          this.chatContainer.addChild(new Spacer(1))
+          this.ui.setFocus(this.editor)
+          this.ui.requestRender()
+          return { consume: true }
+        }
+        return undefined
+      })
+
+      const finish = (selectedMode?: PermissionMode) => {
+        if (finished) return
+        finished = true
+        removeListener()
+        this.chatContainer.removeChild(selectList)
+
+        if (selectedMode) {
+          this.permissionManager.setMode(selectedMode)
+          this.showStatus(`Permission mode set to: ${selectedMode}`)
+        }
+
+        this.chatContainer.addChild(new Spacer(1))
+        this.ui.setFocus(this.editor)
+        this.ui.requestRender()
+      }
+
+      selectList.onSelect = (item) => {
+        finish(item.value as PermissionMode)
+      }
+
+      selectList.onCancel = () => {
+        finish()
+      }
+
       return
     }
 
@@ -938,8 +1017,6 @@ export class App {
         this.chatContainer.addChild(new Spacer(1))
         this.ui.setFocus(this.editor)
         this.ui.requestRender()
-        // Resume spinner
-        this.showWorking()
       }
 
       selectList.onSelect = (item) => {
@@ -1231,20 +1308,10 @@ export class App {
           break
 
         case 'tool_execution_start': {
-          let component: ToolExecutionComponent | FileEditToolUI | FileWriteToolUI | FileReadToolUI
-          switch (event.toolName) {
-            case 'edit':
-              component = new FileEditToolUI(event.toolCallId, event.args)
-              break
-            case 'write':
-              component = new FileWriteToolUI(event.toolCallId, event.args)
-              break
-            case 'read':
-              component = new FileReadToolUI(event.toolCallId, event.args)
-              break
-            default:
-              component = new ToolExecutionComponent(event.toolName, event.toolCallId, event.args)
-          }
+          const UIConstructor = getToolUIConstructor(event.toolName)
+          const component: ToolUIComponent = UIConstructor
+            ? new UIConstructor(event.toolCallId, event.args)
+            : new ToolExecutionComponent(event.toolName, event.toolCallId, event.args)
           component.setExpanded(false)
           component.markExecutionStarted()
           this.chatContainer.addChild(component)
@@ -1276,12 +1343,7 @@ export class App {
               isError: event.isError,
             })
             // Pass details to per-tool UI for diff rendering
-            if (
-              (component instanceof FileEditToolUI ||
-                component instanceof FileWriteToolUI ||
-                component instanceof FileReadToolUI) &&
-              event.result.details
-            ) {
+            if (component.updateDetails && event.result.details) {
               component.updateDetails(event.result.details)
             }
             this.pendingTools.delete(event.toolCallId)
@@ -1303,6 +1365,11 @@ export class App {
           if (event.message.role === 'assistant' && event.message.stopReason === 'aborted') {
             this.chatContainer.addChild(
               new Text(chalk.hex('#cc6666').bold('\nInterrupted\n'), 1, 0),
+            )
+          } else if (event.message.role === 'assistant' && event.message.stopReason === 'error') {
+            const errMsg = event.message.errorMessage || 'Unknown error'
+            this.chatContainer.addChild(
+              new Text(chalk.hex('#cc6666')(`\nError: ${errMsg}\n`), 1, 0),
             )
           }
           this.chatContainer.addChild(new Spacer(1))

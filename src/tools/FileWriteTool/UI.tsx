@@ -56,9 +56,11 @@ export class FileWriteToolUI extends Container {
     this.rebuild()
   }
 
-  updateResult(result: ToolResult): void {
+  updateResult(result: ToolResult, isPartial = false): void {
     this.result = result
-    this.executionStarted = false
+    if (!isPartial) {
+      this.executionStarted = false
+    }
     this.rebuild()
   }
 

@@ -1,8 +1,9 @@
-import { Agent, type AgentMessage, type ThinkingLevel } from '@earendil-works/pi-agent-core'
-import { type Message, streamSimple } from '@earendil-works/pi-ai'
-import { resolveConfig, getApiKeyForProvider, createModelForId } from './config.ts'
-import { createCodingTools } from './tools/index.ts'
+import { Agent, type AgentMessage, type AgentTool, type ThinkingLevel } from '@earendil-works/pi-agent-core'
+import { type Api, type Message, type Model, streamSimple} from '@earendil-works/pi-ai'
+import { getModelConfig, resolveApiKey } from './models/index.ts'
+import { createCodingTools, createToolSearchTool, getDeferredToolNames, TOOL_SEARCH_TOOL_NAME } from './tools/index.ts'
 import { getSystemPrompt } from './constants/prompts.ts'
+import { getAllDeferredToolDefinitions } from './tools/registry.ts'
 import type { McpServerState } from './mcp/types.ts'
 import { CompactionManager, type CompactionProgress } from './session/CompactionManager.ts'
 import type { PermissionManager } from './permissions/index.ts'
@@ -19,8 +20,13 @@ export interface CreateMicrocodeAgentOptions {
 }
 
 export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) {
+
+  // Get the working directory path
   const cwd = options.cwd ?? process.cwd()
-  const config = options.modelId ? createModelForId(options.modelId) : resolveConfig()
+
+  // All model capabilities + API key resolved from registry.ts (Where ModelConfig is defined, getModelConfig function returns ModelConfig object)
+  // ModelConfig includes: model(id, provider, name, api, baseUrl, compat, reasoning, thinkingLevelMap, input, cost, contextWindow, maxTokens), apiKey
+  const modelConfig = getModelConfig(options.modelId)
 
   // Load skills
   const skillsResult = loadSkills({
@@ -29,42 +35,86 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
     includeDefaults: true,
   })
 
-  const systemPromptSections = getSystemPrompt({
+  // Track tools discovered via ToolSearchTool for injection into the next turn
+  const discoveredToolNames = new Set<string>()
+  let pendingDiscoveredTools: AgentTool<any, any>[] = []
+
+  // Create core tools (excluding deferred tools)
+  const coreTools = createCodingTools({
     cwd,
-    modelId: config.model.id,
-    mcpServers: options.mcpServers,
-    skills: skillsResult.skills,
+    getSkills: () => skillsResult.skills,
   })
 
+  // Create ToolSearchTool with callbacks
+  const toolSearchTool = createToolSearchTool({
+    getDeferredTools: getAllDeferredToolDefinitions,
+    onToolsDiscovered: (names: string[]) => {
+      for (const name of names) {
+        if (!discoveredToolNames.has(name)) {
+          discoveredToolNames.add(name)
+          // Create the actual tool instance from the registry definition
+          const def = getAllDeferredToolDefinitions().find(d => d.name === name)
+          if (def) {
+            pendingDiscoveredTools.push(def.createTool(cwd))
+          }
+        }
+      }
+    },
+  })
+
+  // Build initial tools: core tools + ToolSearchTool
+  const initialTools: AgentTool<any, any>[] = [...coreTools, toolSearchTool]
+
+  // Get deferred tool names for the system prompt
+  const deferredToolNames = getDeferredToolNames()
+
+  // Build system prompt with deferred tools section
+  const systemPromptSections = getSystemPrompt({
+    cwd,
+    modelId: modelConfig.model.id,
+    mcpServers: options.mcpServers,
+    skills: skillsResult.skills,
+    deferredToolNames: deferredToolNames.length > 0 ? deferredToolNames : undefined,
+  })
+
+  // Create compaction manager
   const compactionManager = new CompactionManager({
-    model: config.model,
-    apiKey: config.apiKey,
+    model: modelConfig.model,
+    apiKey: modelConfig.apiKey,
     onProgress: options.onCompactionProgress,
   })
 
-  const agent = new Agent({
+  // Create agent
+  const agent: Agent = new Agent({
     initialState: {
       systemPrompt: systemPromptSections.join('\n\n'),
-      model: config.model,
-      tools: createCodingTools({
-        cwd,
-        getSkills: () => skillsResult.skills,
-      }),
+      model: modelConfig.model,
+      tools: initialTools,
     },
     beforeToolCall: options.permissionManager
-      ? async (ctx, signal) => {
+      ? async (ctx, _signal) => {
           return options.permissionManager!.checkPermissionWithPrompt(ctx)
         }
       : undefined,
+    afterToolCall: async (ctx) => {
+      // After ToolSearchTool executes, inject discovered tools into agent state
+      if (ctx.toolCall.name === TOOL_SEARCH_TOOL_NAME && pendingDiscoveredTools.length > 0) {
+        const newTools = pendingDiscoveredTools
+        pendingDiscoveredTools = []
+        agent.state.tools = [...agent.state.tools, ...newTools]
+      }
+      return undefined
+    },
     streamFn: async (model, context, opts) => {
-      const apiKey = getApiKeyForProvider(model.provider) ?? config.apiKey
+      const apiKey = resolveApiKey(model) ?? modelConfig.apiKey
       return streamSimple(model, context, {
         ...opts,
         apiKey,
       })
     },
-    convertToLlm,
-    transformContext: async (messages, signal) => {
+    convertToLlm: createConvertToLlm(() => agent.state.model),
+    transformContext: async (messages, _signal) => {
+
       // Layer 1: Microcompact old tool results
       const { messages: microcompacted } = compactionManager.microcompact(messages)
 
@@ -73,11 +123,9 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
         try {
           return await compactionManager.autoCompact(microcompacted)
         } catch {
-          // If auto-compact fails, continue with microcompacted messages
-          return microcompacted
+          return microcompacted // If auto-compact fails, continue with microcompacted messages
         }
       }
-
       return microcompacted
     },
   })
@@ -118,45 +166,83 @@ export function getSkillDiagnostics(agent: Agent): string[] {
   return (agent as any).__skillDiagnostics ?? []
 }
 
-export function convertToLlm(messages: AgentMessage[]): Message[] {
-  return messages.flatMap((msg) => {
-    switch (msg.role) {
-      case 'user':
-      case 'assistant':
-      case 'toolResult':
-        return [msg as Message]
-      case 'bashExecution':
-        // Convert bash execution to user message with output
-        return [{
-          role: 'user' as const,
-          content: `Command: ${msg.command}\nOutput: ${msg.output}`,
-          timestamp: msg.timestamp,
-        }] as Message[]
-      case 'compactionSummary':
-        // Convert compaction summary to user message
-        return [{
-          role: 'user' as const,
-          content: `[Previous conversation summary]\n${msg.summary}`,
-          timestamp: msg.timestamp,
-        }] as Message[]
-      case 'branchSummary':
-        return [{
-          role: 'user' as const,
-          content: `[Branch summary]\n${msg.summary}`,
-          timestamp: msg.timestamp,
-        }] as Message[]
-      case 'custom':
-        // Convert custom messages to user messages
-        if (typeof msg.content === 'string') {
+/**
+ * Create convertToLlm function, handle cross-API compatibility for thinking blocks.
+ *
+ * All capability judgments are based on model.compat (defined in registry.ts):
+ * - requiresReasoningContentOnAssistantMessages: true → extract thinking text to reasoning_content field
+ * - This field is read by OpenAI provider and included in API requests
+ *
+ * Use factory function + getModel closure, support automatic adaptation after /model switch.
+ */
+export function createConvertToLlm(getModel: () => Model<Api>) {
+  return (messages: AgentMessage[]): Message[] => {
+    // model includes: id, provider, name, api, baseUrl, compat, reasoning, thinkingLevelMap, input, cost, contextWindow, maxTokens
+    const model = getModel() 
+    const compat = model.compat as any
+    const requiresReasoningContent = compat?.requiresReasoningContentOnAssistantMessages && model.reasoning
+
+    return messages.flatMap((msg) => {
+      switch (msg.role) {
+        case 'user':
+        case 'toolResult':
+          return [msg as Message]
+
+        case 'assistant':
+          {
+            // Extract reasoning text from thinking blocks
+            const thinkingText = msg.content
+              .filter((c: any) => c.type === 'thinking')
+              .map((c: any) => c.thinking)
+              .join('\n')
+
+            // Filter out thinking blocks from content, keep text + toolCall
+            const filtered = msg.content.filter((c: any) => c.type !== 'thinking')
+            const result: any = { ...msg, content: filtered }
+
+            // According to model.compat, decide whether to set reasoning_content:
+            // - DeepSeek format (requiresReasoningContentOnAssistantMessages=true): must be returned
+            // - Anthropic format: provider's convertMessages will ignore this field
+            if (requiresReasoningContent) {
+              result.reasoning_content = thinkingText || ''
+            }
+            return [result as Message]
+          }
+
+        case 'bashExecution':
           return [{
             role: 'user' as const,
-            content: msg.content,
+            content: `Command: ${msg.command}\nOutput: ${msg.output}`,
             timestamp: msg.timestamp,
           }] as Message[]
-        }
-        return []
-      default:
-        return []
-    }
-  })
+
+        case 'compactionSummary':
+          return [{
+            role: 'user' as const,
+            content: `[Previous conversation summary]\n${msg.summary}`,
+            timestamp: msg.timestamp,
+          }] as Message[]
+
+        case 'branchSummary':
+          return [{
+            role: 'user' as const,
+            content: `[Branch summary]\n${msg.summary}`,
+            timestamp: msg.timestamp,
+          }] as Message[]
+
+        case 'custom':
+          if (typeof msg.content === 'string') {
+            return [{
+              role: 'user' as const,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            }] as Message[]
+          }
+          return []
+
+        default:
+          return []
+      }
+    })
+  }
 }

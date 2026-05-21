@@ -1,49 +1,75 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type { PermissionBehavior } from '../permissions/types.ts'
-import { createBashTool, TOOL_DEFAULT_PERMISSION as bashDefault } from './BashTool/BashTool.ts'
-import { createFileReadTool, TOOL_DEFAULT_PERMISSION as fileReadDefault } from './FileReadTool/FileReadTool.ts'
-import { createFileWriteTool, TOOL_DEFAULT_PERMISSION as fileWriteDefault } from './FileWriteTool/FileWriteTool.ts'
-import { createFileEditTool, TOOL_DEFAULT_PERMISSION as fileEditDefault } from './FileEditTool/FileEditTool.ts'
-import {
-  createSkillToolWithAgent,
-  TOOL_DEFAULT_PERMISSION as skillDefault,
-} from './SkillTool/SkillTool.ts'
+import { getAllToolDefinitions, getAllDeferredToolDefinitions, getCoreToolDefinitions, getToolDefaultPermissions, registerTool } from './registry.ts'
+import { createSkillToolWithAgent, TOOL_DEFAULT_PERMISSION as skillDefault } from './SkillTool/SkillTool.ts'
+import { createToolSearchTool, TOOL_SEARCH_TOOL_NAME, type ToolSearchToolOptions } from './ToolSearchTool/ToolSearchTool.ts'
 
+// Import tool registrations (side effects — each calls registerTool())
+import './BashTool/index.ts'
+import './FileEditTool/index.ts'
+import './FileWriteTool/index.ts'
+import './FileReadTool/index.ts'
+import './ToolSearchTool/index.ts'
+
+// Re-exports for backward compatibility
 export { createBashTool, TOOL_DEFAULT_PERMISSION as BASH_DEFAULT_PERMISSION } from './BashTool/BashTool.ts'
 export { createFileReadTool, TOOL_DEFAULT_PERMISSION as FILE_READ_DEFAULT_PERMISSION } from './FileReadTool/FileReadTool.ts'
 export { createFileWriteTool, TOOL_DEFAULT_PERMISSION as FILE_WRITE_DEFAULT_PERMISSION } from './FileWriteTool/FileWriteTool.ts'
 export { createFileEditTool, TOOL_DEFAULT_PERMISSION as FILE_EDIT_DEFAULT_PERMISSION } from './FileEditTool/FileEditTool.ts'
-export { createMcpTool, createMcpTools } from './MCPTool/MCPTool.ts'
+export { createMcpTool, createMcpTools, registerMcpToolsAsDeferred } from './MCPTool/MCPTool.ts'
 export { createListMcpResourcesTool } from './ListMcpResourcesTool/ListMcpResourcesTool.ts'
 export { createReadMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResourceTool.ts'
 export { createSkillToolWithAgent, TOOL_DEFAULT_PERMISSION as SKILL_DEFAULT_PERMISSION } from './SkillTool/SkillTool.ts'
+export { createToolSearchTool, TOOL_SEARCH_TOOL_NAME } from './ToolSearchTool/ToolSearchTool.ts'
+export type { ToolSearchToolOptions } from './ToolSearchTool/ToolSearchTool.ts'
+
+/** Get the names of all deferred tool definitions (for system prompt listing). */
+export function getDeferredToolNames(): string[] {
+  return getAllDeferredToolDefinitions().map(def => def.name)
+}
 
 /** Default permission behavior for each built-in tool (tool name → behavior). */
 export const TOOL_DEFAULT_PERMISSIONS: Record<string, PermissionBehavior> = {
-  bash: bashDefault,
-  read: fileReadDefault,
-  write: fileWriteDefault,
-  edit: fileEditDefault,
+  ...getToolDefaultPermissions(),
   skill: skillDefault,
 }
+
+// ============================================================================
+// Tool creation
+// ============================================================================
 
 export interface CreateCodingToolsOptions {
   cwd: string
   getSkills?: () => any[]
+  /** If true, include deferred tools in the output. Default: false. */
+  includeDeferred?: boolean
 }
 
 export function createCodingTools(options: CreateCodingToolsOptions): AgentTool<any, any>[] {
-  const { cwd, getSkills } = options
+  const { cwd, getSkills, includeDeferred = false } = options
 
-  const tools: AgentTool<any, any>[] = [
-    createBashTool(cwd),
-    createFileReadTool(cwd),
-    createFileWriteTool(cwd),
-    createFileEditTool(cwd),
-  ]
+  const tools: AgentTool<any, any>[] = []
 
-  // Add SkillTool if getSkills is provided
+  // Create tools from registry (excluding skill, which needs special handling)
+  const defs = includeDeferred ? getAllToolDefinitions() : getCoreToolDefinitions()
+  for (const def of defs) {
+    if (def.name === 'skill') continue
+    // Skip ToolSearchTool placeholder — it's created separately in agent.ts
+    if (def.name === TOOL_SEARCH_TOOL_NAME) continue
+    tools.push(def.createTool(cwd))
+  }
+
+  // SkillTool needs getSkills at creation time
   if (getSkills) {
+    registerTool({
+      name: 'skill',
+      defaultPermission: skillDefault,
+      createTool: () => createSkillToolWithAgent({ getSkills }),
+      formatDescription: (input) =>
+        typeof input.skill === 'string' ? `skill ${input.skill}` : '(unknown skill)',
+      extractMatchContent: (input) =>
+        typeof input.skill === 'string' ? input.skill : undefined,
+    })
     tools.push(createSkillToolWithAgent({ getSkills }))
   }
 

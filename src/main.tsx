@@ -5,7 +5,7 @@ import { McpClientManager } from './mcp/client.ts'
 import { loadMcpConfig, isMcpConfigEmpty } from './mcp/config.ts'
 import { addMcpServer, removeMcpServer, listMcpServers, parseEnvVars, parseHeaders, type ConfigScope } from './mcp/configWrite.ts'
 import type { McpServerConfig } from './mcp/types.ts'
-import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool } from './tools/index.ts'
+import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool, registerMcpToolsAsDeferred } from './tools/index.ts'
 import { SessionManager } from './session/SessionManager.ts'
 import { PermissionManager, type PermissionMode, PERMISSION_MODES } from './permissions/index.ts'
 
@@ -194,7 +194,8 @@ Options:
   --version, -v              Show version
   --help, -h                 Show this help
   --resume [id]              Resume a session (last session if no id given)
-  --permission-mode <mode>   Set permission mode: default, auto-approve, plan
+  --permission <mode>        Set permission mode: default, auto-approve, plan
+  --permission-mode <mode>   (alias for --permission)
   --model <model-id>         Override the model (e.g., claude-sonnet-4-20250514)
   --thinking <level>         Set thinking depth: off, minimal, low, medium, high, xhigh
 
@@ -269,8 +270,10 @@ Session Management:
     : undefined
   const filteredArgs = args.filter((a) => !a.startsWith('-'))
 
-  // Parse --permission-mode flag
-  const permModeIdx = args.indexOf('--permission-mode')
+  // Parse --permission / --permission-mode flag
+  const permModeIdx = args.indexOf('--permission') !== -1
+    ? args.indexOf('--permission')
+    : args.indexOf('--permission-mode')
   let permissionMode: PermissionMode | undefined
   if (permModeIdx !== -1) {
     const modeArg = args[permModeIdx + 1]?.toLowerCase()
@@ -384,15 +387,17 @@ Session Management:
   const mcpConfigs = await loadMcpConfig(cwd)
   if (!isMcpConfigEmpty(mcpConfigs)) {
     void mcpClient.connectAll(mcpConfigs).then(() => {
-      // Inject MCP tools + resource tools
-      const mcpTools = createMcpTools(mcpClient)
+      // Register MCP tools as deferred (discovered via ToolSearchTool)
+      registerMcpToolsAsDeferred(mcpClient)
+
+      // Inject resource tools directly (they're always needed)
       const resourceTools = [
         createListMcpResourcesTool(mcpClient),
         createReadMcpResourceTool(mcpClient),
       ]
-      agent.state.tools = [...agent.state.tools, ...mcpTools, ...resourceTools]
+      agent.state.tools = [...agent.state.tools, ...resourceTools]
 
-      // Rebuild system prompt with MCP info
+      // Rebuild system prompt with MCP info and deferred tool names
       app.updateMcpState(mcpClient)
 
       // Notify user in chat

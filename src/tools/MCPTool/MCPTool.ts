@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import { Type, type TSchema } from 'typebox'
 import type { McpClientManager } from '../../mcp/client.ts'
 import type { McpToolInfo } from '../../mcp/types.ts'
+import { registerDynamicDeferredTool, type ToolDefinition } from '../registry.ts'
 
 function jsonSchemaToTypeBox(inputSchema: Record<string, any>): TSchema {
   if (inputSchema.properties) {
@@ -87,4 +88,22 @@ export function createMcpTool(
 export function createMcpTools(clientManager: McpClientManager): AgentTool[] {
   const tools = clientManager.getAllTools()
   return tools.map((toolInfo) => createMcpTool(clientManager, toolInfo))
+}
+
+/**
+ * Register MCP tools as dynamic deferred tools so they can be discovered
+ * via ToolSearchTool. Call this when MCP servers connect.
+ */
+export function registerMcpToolsAsDeferred(clientManager: McpClientManager): void {
+  const tools = clientManager.getAllTools()
+  for (const toolInfo of tools) {
+    const toolName = `mcp__${toolInfo.serverName}__${toolInfo.name}`
+    registerDynamicDeferredTool({
+      name: toolName,
+      defaultPermission: 'allow',
+      createTool: () => createMcpTool(clientManager, toolInfo),
+      description: `[MCP:${toolInfo.serverName}] ${toolInfo.description}`,
+      shouldDefer: true,
+    })
+  }
 }
