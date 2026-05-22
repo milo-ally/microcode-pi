@@ -66,20 +66,20 @@ export class FileReadToolUI extends Container {
 
     const icon = this.result
       ? this.result.isError
-        ? chalk.hex('#cc6666')('✗')
-        : chalk.hex('#b5bd68')('✓')
+        ? theme.fg('error', '✗')
+        : theme.fg('success', '✓')
       : this.executionStarted
-        ? chalk.hex('#ffff00')('⚙')
-        : chalk.hex('#666666')('○')
+        ? theme.fg('warning', '⚙')
+        : theme.dim('○')
 
     const filePath = this.details?.path || this.args?.file_path || ''
     const shortPath = filePath.split('/').slice(-2).join('/')
-    const header = `${icon} ${chalk.bold('read')} ${chalk.hex('#666666')(shortPath)}`
+    const header = `${icon} ${chalk.bold('read')} ${theme.fg('accent', shortPath)}`
 
     this.contentBox.clear()
 
     if (!this.result) {
-      this.contentBox.addChild(new Text(`${header} ${chalk.hex('#666666')('running...')}`))
+      this.contentBox.addChild(new Text(`${header} ${theme.dim('running…')}`))
       return
     }
 
@@ -88,17 +88,17 @@ export class FileReadToolUI extends Container {
     const truncated = this.details?.truncated
 
     if (totalLines !== undefined && returnedLines !== undefined) {
-      let summary = chalk.hex('#808080')(`Read ${returnedLines} of ${totalLines} lines`)
-      if (truncated) {
-        summary += chalk.hex('#666666')(' (truncated)')
-      }
-      this.contentBox.addChild(new Text(`${header}\n  ${summary}`))
+      const lineInfo = truncated
+        ? `${returnedLines}/${totalLines} lines ${theme.dim('(truncated)')}`
+        : `${returnedLines} lines`
+      const summary = theme.fg('muted', lineInfo)
+      this.contentBox.addChild(new Text(`${header}  ${summary}`))
     } else {
       const output = this.result.content
         ?.filter((c) => c.type === 'text')
         .map((c) => (c.text ?? '').slice(0, 200).replace(/\n/g, ' '))
         .join(' ') ?? ''
-      this.contentBox.addChild(new Text(`${header}\n  ${chalk.hex('#808080')(output)}`))
+      this.contentBox.addChild(new Text(`${header}\n  ${theme.fg('muted', output)}`))
     }
   }
 }

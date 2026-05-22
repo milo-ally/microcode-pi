@@ -1,5 +1,6 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import { createMicrocodeAgent } from './agent.ts'
+import { resolveApiKey } from './models/index.ts'
 import { App } from './tui/app.ts'
 import { McpClientManager } from './mcp/client.ts'
 import { loadMcpConfig, isMcpConfigEmpty } from './mcp/config.ts'
@@ -363,9 +364,22 @@ Session Management:
   // Create TUI app (REPL starts immediately)
   const app = new App(agent, mcpClient, sessionManager, permissionManager, modelId, thinkingLevel)
 
+  // Warn if no API key is configured (non-blocking — app still starts)
+  if (!resolveApiKey(agent.state.model)) {
+    const provider = (agent.state.model.provider as string).toUpperCase().replace(/-/g, '_')
+    app.addStartupWarning(
+      `No API key configured. Set ${provider}_API_KEY or API_KEY to enable model responses.`,
+    )
+  }
+
   // Wire permission prompt to TUI
   permissionManager.setOnPermissionRequest(
     (toolName, input, description) => app.promptPermission(toolName, input, description),
+  )
+
+  // Wire ask_user_question interactive handler to TUI
+  permissionManager.setOnAskUserQuestion(
+    (toolName, input) => app.promptAskUserQuestion(toolName, input),
   )
 
   // Handle exit from TUI (Ctrl+C, Ctrl+D, Escape)

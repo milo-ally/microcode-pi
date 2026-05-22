@@ -77,6 +77,7 @@ export class App {
   private permissionManager: PermissionManager
   private isBashMode = false
   private bashComponent?: BashExecutionComponent
+  private startupWarnings: string[] = []
   onExit?: () => void | Promise<void>
 
   constructor(agent: Agent, mcpClient?: McpClientManager, sessionManager?: SessionManager, permissionManager?: PermissionManager, modelId?: string, thinkingLevel?: ThinkingLevel) {
@@ -109,9 +110,23 @@ export class App {
     return this.sessionManager
   }
 
+  /** Queue a warning to be shown in the chat area after TUI initializes. */
+  addStartupWarning(message: string): void {
+    this.startupWarnings.push(message)
+  }
+
   async run(): Promise<void> {
     this.init()
     this.setupAgentSubscription()
+
+    // Show any queued startup warnings
+    for (const msg of this.startupWarnings) {
+      this.chatContainer.addChild(new Text(chalk.hex('#ffff00')(`⚠ ${msg}`), 1, 0))
+      this.chatContainer.addChild(new Spacer(1))
+    }
+    if (this.startupWarnings.length > 0) {
+      this.ui.requestRender()
+    }
 
     // Main interactive loop
     while (true) {
@@ -1086,6 +1101,140 @@ export class App {
 
     this.chatContainer.addChild(new Spacer(1))
     this.ui.requestRender()
+  }
+
+  /**
+   * Interactively present questions from the ask_user_question tool and collect answers.
+   * Each question is shown as a SelectList in the chat area.
+   * Returns the collected answers, or { block: true } if cancelled.
+   */
+  async promptAskUserQuestion(
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Promise<{ answers?: Record<string, string>; block?: boolean }> {
+    const questions = input.questions as Array<{
+      question: string
+      header: string
+      options: Array<{ label: string; description: string }>
+      multiSelect?: boolean
+    }>
+
+    if (!questions || questions.length === 0) {
+      return { block: true }
+    }
+
+    const answers: Record<string, string> = {}
+
+    for (const q of questions) {
+      const answer = await this.promptSingleQuestion(q)
+      if (answer === undefined) {
+        // User cancelled
+        return { block: true }
+      }
+      answers[q.question] = answer
+    }
+
+    return { answers }
+  }
+
+  /**
+   * Present a single question with its options as a SelectList.
+   * Returns the selected answer string, or undefined if cancelled.
+   */
+  private async promptSingleQuestion(q: {
+    question: string
+    header: string
+    options: Array<{ label: string; description: string }>
+    multiSelect?: boolean
+  }): Promise<string | undefined> {
+    return new Promise<string | undefined>((resolve) => {
+      this.hideWorking()
+      this.permissionPromptActive = true
+
+      // Build select items from options + "Other"
+      const items: SelectItem[] = q.options.map((opt) => ({
+        value: opt.label,
+        label: opt.label,
+        description: opt.description,
+      }))
+      items.push({
+        value: '__other__',
+        label: 'Other',
+        description: 'Provide a custom answer',
+      })
+
+      const selectList = new SelectList(items, items.length, {
+        selectedPrefix: (text) => chalk.cyan(text),
+        selectedText: (text) => chalk.cyan(text),
+        description: (text) => theme.dim(text),
+        scrollInfo: (text) => theme.dim(text),
+        noMatch: (text) => theme.dim(text),
+      })
+
+      // Show question header and the select list
+      const headerLabel = theme.fg('accent', `${q.header}:`)
+      this.chatContainer.addChild(new Text(`${headerLabel} ${q.question}`, 1, 0))
+      this.chatContainer.addChild(selectList)
+      this.ui.setFocus(selectList)
+      this.ui.requestRender()
+
+      let finished = false
+      const removeListener = this.ui.addInputListener((data) => {
+        if (data === '\x03') {
+          // Ctrl+C — cancel
+          finished = true
+          removeListener()
+          this.permissionPromptActive = false
+          this.chatContainer.removeChild(selectList)
+          this.chatContainer.addChild(new Spacer(1))
+          this.ui.setFocus(this.editor)
+          this.ui.requestRender()
+          resolve(undefined)
+          return { consume: true }
+        }
+        return undefined
+      })
+
+      const finish = (value?: string) => {
+        if (finished) return
+        finished = true
+        removeListener()
+        this.permissionPromptActive = false
+        this.chatContainer.removeChild(selectList)
+
+        if (value === '__other__') {
+          // Show "Other" prompt — let user type free-text
+          this.chatContainer.addChild(
+            new Text(theme.dim('Type your answer and press Enter:'), 1, 0),
+          )
+          this.ui.setFocus(this.editor)
+          this.ui.requestRender()
+
+          // Wait for user to type in the editor
+          void this.getUserInput().then((text) => {
+            const trimmed = text.trim()
+            this.chatContainer.addChild(new Text(`  ${chalk.cyan(trimmed)}`, 1, 0))
+            this.chatContainer.addChild(new Spacer(1))
+            this.ui.requestRender()
+            resolve(trimmed || undefined)
+          })
+          return
+        }
+
+        // Show selected answer
+        this.chatContainer.addChild(
+          new Text(`  ${chalk.cyan(value ?? '')}`, 1, 0),
+        )
+        this.chatContainer.addChild(new Spacer(1))
+        this.showWorking()
+        this.ui.setFocus(this.editor)
+        this.ui.requestRender()
+        resolve(value)
+      }
+
+      selectList.onSelect = (item) => finish(item.value)
+      selectList.onCancel = () => finish(undefined)
+    })
   }
 
   /**

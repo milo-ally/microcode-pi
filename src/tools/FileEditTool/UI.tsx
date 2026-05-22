@@ -83,20 +83,20 @@ export class FileEditToolUI extends Container {
 
     const icon = this.result
       ? this.result.isError
-        ? chalk.hex('#cc6666')('✗')
-        : chalk.hex('#b5bd68')('✓')
+        ? theme.fg('error', '✗')
+        : theme.fg('success', '✓')
       : this.executionStarted
-        ? chalk.hex('#ffff00')('⚙')
-        : chalk.hex('#666666')('○')
+        ? theme.fg('warning', '⚙')
+        : theme.dim('○')
 
     const filePath = this.details?.path || this.args?.file_path || ''
     const shortPath = filePath.split('/').slice(-2).join('/')
-    const header = `${icon} ${chalk.bold('edit')} ${chalk.hex('#666666')(shortPath)}`
+    const header = `${icon} ${chalk.bold('edit')} ${theme.fg('accent', shortPath)}`
 
     this.contentBox.clear()
 
     if (!this.result) {
-      this.contentBox.addChild(new Text(`${header} ${chalk.hex('#666666')('running...')}`))
+      this.contentBox.addChild(new Text(`${header} ${theme.dim('running…')}`))
       return
     }
 
@@ -114,13 +114,13 @@ export class FileEditToolUI extends Container {
       }
 
       if (!this.expanded && this.diffResult.patch.hunks.length > COLLAPSED_MAX_HUNKS) {
-        lines.push(chalk.hex('#666666')('  (expand to see full diff)'))
+        lines.push(theme.dim('  (expand to see full diff)'))
       }
 
       this.contentBox.addChild(new Text(lines.join('\n')))
     } else {
       const output = this.getOutputPreview()
-      this.contentBox.addChild(new Text(`${header}\n  ${chalk.hex('#808080')(output)}`))
+      this.contentBox.addChild(new Text(`${header}\n  ${theme.fg('muted', output)}`))
     }
   }
 

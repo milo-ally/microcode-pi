@@ -1,0 +1,45 @@
+/*
+ * AskUserQuestionTool Registration
+ * Provides structured user questioning and answer collection functionality.
+ * Uses permission-integrated architecture where the PermissionManager handles
+ * user interaction and injects answers into tool arguments.
+ *
+ */
+// @ts-nocheck
+
+import { registerTool } from '../registry.ts'
+import { createAskUserQuestionTool, TOOL_DEFAULT_PERMISSION } from './AskUserQuestionTool.ts'
+import { AskUserQuestionToolUI } from './UI.tsx'
+
+registerTool({
+  name: 'ask_user_question',
+  defaultPermission: TOOL_DEFAULT_PERMISSION,
+  createTool: createAskUserQuestionTool, 
+  ui: AskUserQuestionToolUI,
+  description:
+    'Asks the user multiple choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices.',
+  formatDescription: (input) => {
+    if (Array.isArray(input.questions)) {
+      const count = input.questions.length
+      const first = input.questions[0]
+      if (first && typeof first.question === 'string') {
+        const preview =
+          first.question.length > 60
+            ? first.question.slice(0, 60) + '...'
+            : first.question
+        return `ask ${count} question${count > 1 ? 's' : ''}: "${preview}"`
+      }
+      return `ask ${count} question${count > 1 ? 's' : ''}`
+    }
+    return '(ask user question)'
+  },
+  extractMatchContent: (input) => {
+    if (Array.isArray(input.questions)) {
+      return input.questions
+        .map((q: any) => (typeof q.question === 'string' ? q.question : ''))
+        .filter(Boolean)
+        .join(' ')
+    }
+    return undefined
+  },
+})

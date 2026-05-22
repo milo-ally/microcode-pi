@@ -10,6 +10,7 @@ import './FileEditTool/index.ts'
 import './FileWriteTool/index.ts'
 import './FileReadTool/index.ts'
 import './ToolSearchTool/index.ts'
+import './AskUserQuestionTool/index.ts'
 
 // Re-exports for backward compatibility
 export { createBashTool, TOOL_DEFAULT_PERMISSION as BASH_DEFAULT_PERMISSION } from './BashTool/BashTool.ts'
@@ -22,6 +23,7 @@ export { createReadMcpResourceTool } from './ReadMcpResourceTool/ReadMcpResource
 export { createSkillToolWithAgent, TOOL_DEFAULT_PERMISSION as SKILL_DEFAULT_PERMISSION } from './SkillTool/SkillTool.ts'
 export { createToolSearchTool, TOOL_SEARCH_TOOL_NAME } from './ToolSearchTool/ToolSearchTool.ts'
 export type { ToolSearchToolOptions } from './ToolSearchTool/ToolSearchTool.ts'
+export { createAskUserQuestionTool, ASK_USER_QUESTION_TOOL_NAME } from './AskUserQuestionTool/AskUserQuestionTool.ts'
 
 /** Get the names of all deferred tool definitions (for system prompt listing). */
 export function getDeferredToolNames(): string[] {

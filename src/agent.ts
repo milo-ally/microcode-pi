@@ -108,7 +108,15 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
       return undefined
     },
     streamFn: async (model, context, opts) => {
-      const apiKey = resolveApiKey(model) ?? modelConfig.apiKey
+      // Dynamic resolution: env vars may have been set after startup
+      const apiKey = resolveApiKey(model) || modelConfig.apiKey
+      if (!apiKey) {
+        const provider = (model.provider as string).toUpperCase().replace(/-/g, '_')
+        throw new Error(
+          `No API key configured for model "${model.id}".\n` +
+          `Set one of: ${provider}_API_KEY, API_KEY, OPENAI_API_KEY`,
+        )
+      }
       return streamSimple(model, context, {
         ...opts,
         apiKey,
@@ -143,6 +151,14 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
   // Attach skills to agent for external access
   ;(agent as any).__skills = skillsResult.skills
   ;(agent as any).__skillDiagnostics = skillsResult.diagnostics
+
+  // Wire up getTool resolver on PermissionManager so it can look up tools
+  // by name (used by ask_user_question to store answers on the tool object)
+  if (options.permissionManager) {
+    options.permissionManager.setGetTool((name: string) =>
+      agent.state.tools.find((t: any) => t.name === name),
+    )
+  }
 
   return agent
 }

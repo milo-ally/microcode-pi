@@ -65,11 +65,11 @@ export class BashToolUI extends Container implements ToolUIComponent {
 
     const icon = this.result && !this.executionStarted
       ? this.result.isError
-        ? chalk.hex('#cc6666')('✗')
-        : chalk.hex('#b5bd68')('✓')
+        ? theme.fg('error', '✗')   // ✗
+        : theme.fg('success', '✓')  // ✓
       : this.executionStarted
-        ? chalk.hex('#ffff00')('⚙')
-        : chalk.hex('#666666')('○')
+        ? theme.fg('warning', '⚙')  // ⚙
+        : theme.dim('○')            // ○
 
     const cmd = this.args?.command ?? ''
     const shortCmd = cmd.length > COMMAND_PREVIEW_LEN
@@ -77,13 +77,13 @@ export class BashToolUI extends Container implements ToolUIComponent {
       : cmd
     const description = this.args?.description
     const header = description
-      ? `${icon} ${chalk.bold('bash')} ${chalk.hex('#666666')(description)}`
-      : `${icon} ${chalk.bold('bash')} ${chalk.hex('#808080')('$')} ${chalk.hex('#d4d4d4')(shortCmd)}`
+      ? `${icon} ${chalk.bold('bash')} ${theme.dim(description)}`
+      : `${icon} ${chalk.bold('bash')} ${theme.fg('muted', '$')} ${theme.fg('text', shortCmd)}`
 
     this.contentBox.clear()
 
     if (!this.result) {
-      this.contentBox.addChild(new Text(`${header} ${chalk.hex('#666666')('running...')}`))
+      this.contentBox.addChild(new Text(`${header} ${theme.dim('running…')}`))
       return
     }
 
@@ -102,7 +102,7 @@ export class BashToolUI extends Container implements ToolUIComponent {
 
     const exitLine = this.renderExitCode()
     const toggleHint = lines.length > COLLAPSED_OUTPUT_LINES
-      ? chalk.hex('#505050')(this.expanded ? ' [collapse]' : ` [expand, ${lines.length} lines]`)
+      ? theme.dim(this.expanded ? ' [collapse]' : ` [expand, ${lines.length} lines]`)
       : ''
 
     let content = header
@@ -118,9 +118,9 @@ export class BashToolUI extends Container implements ToolUIComponent {
     const { exitCode } = this.details
     if (exitCode === null || exitCode === undefined) return ''
     if (exitCode === 0) {
-      return chalk.hex('#505050')(`exit: ${exitCode}`)
+      return theme.dim(`exit: ${exitCode}`)
     }
-    return chalk.hex('#cc6666')(`exit: ${exitCode}`)
+    return theme.fg('error', `exit: ${exitCode}`)
   }
 
   private getOutput(): string {

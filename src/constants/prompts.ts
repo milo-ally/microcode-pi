@@ -133,6 +133,22 @@ Focus text output on:
 If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations. This does not apply to code or tool calls.`
 }
 
+function getAskUserQuestionSection(): string {
+  return `# Ask User Question Tool
+
+Use the \`ask_user_question\` tool when you need to ask the user questions during execution. This allows you to:
+1. Gather user preferences or requirements
+2. Clarify ambiguous instructions
+3. Get decisions on implementation choices as you work
+4. Offer choices to the user about what direction to take.
+
+Usage notes:
+- Users will always be able to select "Other" to provide custom text input
+- Use multiSelect: true to allow multiple answers to be selected for a question
+- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
+- Keep questions concise and specific (max 12 chars for header, 2-4 options per question)`
+}
+
 function getEnvInfoSection(
   cwd: string,
   modelId: string,
@@ -234,6 +250,7 @@ export function getSystemPrompt(options: GetSystemPromptOptions): string[] {
     getUsingYourToolsSection(),
     getToneAndStyleSection(),
     getOutputEfficiencySection(),
+    getAskUserQuestionSection(),
     // Dynamic sections
     getEnvInfoSection(cwd, modelId),
     getMcpInstructionsSection(mcpServers),

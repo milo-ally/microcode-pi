@@ -7,7 +7,7 @@
  * - plan: only allow read-only tools
  */
 
-import type { BeforeToolCallContext, BeforeToolCallResult } from '@earendil-works/pi-agent-core'
+import type { AgentTool, BeforeToolCallContext, BeforeToolCallResult } from '@earendil-works/pi-agent-core'
 import { getToolDefinition } from '../tools/registry.ts'
 import { matchRule, parseRuleString, ruleValueToString } from './rules.ts'
 import type {
@@ -31,6 +31,12 @@ export interface PermissionManagerOptions {
     input: Record<string, unknown>,
     description: string,
   ) => Promise<boolean>
+  onAskUserQuestion?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => Promise<{ answers?: Record<string, string>; block?: boolean }>
+  /** Resolver to look up a tool instance by name from agent.state.tools. */
+  getTool?: (name: string) => AgentTool<any, any> | undefined
 }
 
 export class PermissionManager {
@@ -40,6 +46,11 @@ export class PermissionManager {
     input: Record<string, unknown>,
     description: string,
   ) => Promise<boolean>
+  private onAskUserQuestion?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => Promise<{ answers?: Record<string, string>; block?: boolean }>
+  private getTool?: (name: string) => AgentTool<any, any> | undefined
 
   constructor(options: PermissionManagerOptions = {}) {
     const allowRules: PermissionRule[] = []
@@ -66,6 +77,8 @@ export class PermissionManager {
       askRules,
     }
     this.onPermissionRequest = options.onPermissionRequest
+    this.onAskUserQuestion = options.onAskUserQuestion
+    this.getTool = options.getTool
   }
 
   setOnPermissionRequest(
@@ -76,6 +89,21 @@ export class PermissionManager {
     ) => Promise<boolean>,
   ): void {
     this.onPermissionRequest = handler
+  }
+
+  setOnAskUserQuestion(
+    handler: (
+      toolName: string,
+      input: Record<string, unknown>,
+    ) => Promise<{ answers?: Record<string, string>; block?: boolean }>,
+  ): void {
+    this.onAskUserQuestion = handler
+  }
+
+  setGetTool(
+    resolver: (name: string) => AgentTool<any, any> | undefined,
+  ): void {
+    this.getTool = resolver
   }
 
   getMode(): PermissionMode {
@@ -189,6 +217,25 @@ export class PermissionManager {
     // Denied by rule
     if (decision.reason !== 'ask') {
       return { block: true, reason: decision.reason }
+    }
+
+    // ★ Elegant: for ask_user_question, the permission flow IS the tool's functionality.
+    // Instead of a generic "allow/deny" prompt, we hijack the 'ask' path to run an
+    // interactive Q&A session. Answers are stored on the tool object so execute()
+    // can read them — the tool and the permission system are symbiotic.
+    if (toolName === 'ask_user_question' && this.onAskUserQuestion) {
+      const result = await this.onAskUserQuestion(toolName, input)
+      if (result.block) {
+        return { block: true, reason: `User cancelled question for "${toolName}"` }
+      }
+      // Store answers on the tool object so execute() can read them
+      if (result.answers && this.getTool) {
+        const tool = this.getTool(toolName) as any
+        if (tool?.setAnswers) {
+          tool.setAnswers(result.answers)
+        }
+      }
+      return undefined
     }
 
     // Ask behavior — prompt user

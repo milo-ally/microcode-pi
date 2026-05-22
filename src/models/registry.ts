@@ -195,12 +195,6 @@ export function resolveApiKey(model: Model<Api>): string | undefined {
  */
 export function getModelConfig(modelId?: string): ModelConfig {
   const model = modelId ? findModel(modelId) ?? getCurrentModel() : getCurrentModel()
-  const apiKey = resolveApiKey(model)
-  if (!apiKey) {
-    throw new Error(
-      `No API key found for model "${model.id}" (provider: ${model.provider}).\n` +
-        'Set API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.',
-    )
-  }
+  const apiKey = resolveApiKey(model) ?? ''
   return { model, apiKey }
 }

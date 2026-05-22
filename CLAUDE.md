@@ -528,5 +528,463 @@ turn_end              ← More toolCalls → continue loop; none → wait for us
 4. **Factory function pattern** — `createTool(cwd)` lets tools capture context like the working directory, avoiding global state
 5. **Permission/tool decoupling** — Tools only declare `defaultPermission`; rule matching is handled centrally by `PermissionManager`
 
+## Complete Tool Definition Example
+
+### ToolDefinition Interface — All Fields
+
+```typescript
+interface ToolDefinition {
+  // Required fields
+
+  /** Unique identifier used for registration and invocation */
+  name: string
+
+  /** Default permission policy */
+  defaultPermission: 'allow' | 'deny' | 'ask'
+
+  /** Factory function that creates a tool instance */
+  createTool: (...args: any[]) => AgentTool<any, any>
+
+  /** Tool description, used by ToolSearchTool for keyword search */
+  description?: string
+
+  // Optional fields
+
+  /** TUI rendering component constructor */
+  ui?: ToolUIConstructor
+
+  /** Formats a tool call into a human-readable description (for permission prompts, etc.) */
+  formatDescription?: (input: Record<string, unknown>) => string
+
+  /** Extracts content for permission rule matching */
+  extractMatchContent?: (input: Record<string, unknown>) => string | undefined
+
+  /** Whether to defer loading (true = discovered via tool_search, false = loaded immediately) */
+  shouldDefer?: boolean
+}
+```
+
 ---
 
+### Example: Creating a "Send Notification" Tool
+
+#### File Structure
+
+```
+src/tools/NotifyTool/
+├── NotifyTool.ts      # Tool logic
+├── index.ts           # Registration entry
+└── UI.tsx             # TUI component (optional)
+```
+
+---
+
+#### File 1: `src/tools/NotifyTool/NotifyTool.ts`
+
+```typescript
+import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import { Type, type Static } from 'typebox'
+import type { PermissionBehavior } from '../../permissions/types.ts'
+
+// Default permission policy:
+// 'allow' — auto-approve, no confirmation needed
+// 'deny'  — deny by default
+// 'ask'   — require user confirmation before execution
+export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask'
+
+// Input parameter schema (TypeBox)
+const NotifyToolSchema = Type.Object({
+  title: Type.String({
+    description: 'Notification title',
+    minLength: 1,
+    maxLength: 100,
+  }),
+
+  message: Type.String({
+    description: 'Notification body',
+    minLength: 1,
+    maxLength: 1000,
+  }),
+
+  priority: Type.Optional(
+    Type.Union([
+      Type.Literal('low', { description: 'Low priority' }),
+      Type.Literal('normal', { description: 'Normal priority' }),
+      Type.Literal('high', { description: 'High priority' }),
+    ], { description: 'Notification priority', default: 'normal' })
+  ),
+
+  requiresAck: Type.Optional(
+    Type.Boolean({ description: 'Whether user acknowledgment is required', default: false })
+  ),
+})
+
+// Static type derived from the schema
+export type NotifyToolInput = Static<typeof NotifyToolSchema>
+
+// Extra data returned to the caller
+export interface NotifyToolDetails {
+  notificationId: string
+  sentAt: string
+  recipient: string
+}
+
+// Factory function: creates a notification tool instance
+export function createNotifyTool(
+  options: NotifyToolOptions
+): AgentTool<typeof NotifyToolSchema, NotifyToolDetails> {
+  const { notificationService, defaultRecipient } = options
+
+  return {
+    name: 'notify',
+    label: 'Send Notification',
+
+    // Description used by ToolSearchTool keyword search.
+    // Should clearly state the tool's purpose and usage scenarios.
+    description: 'Send a notification to the user. Supports title, message, priority, and acknowledgment.',
+
+    parameters: NotifyToolSchema,
+
+    async execute(
+      toolCallId: string,
+      params: NotifyToolInput,
+      signal?: AbortSignal,
+      onUpdate?: (partial: AgentToolResult<NotifyToolDetails>) => void,
+    ): Promise<AgentToolResult<NotifyToolDetails>> {
+      const { title, message, priority = 'normal', requiresAck = false } = params
+
+      if (!title || !message) {
+        throw new Error('Title and message are required')
+      }
+
+      if (signal?.aborted) {
+        throw new Error('Tool execution was cancelled')
+      }
+
+      try {
+        const notificationId = await notificationService.send({
+          title,
+          message,
+          priority,
+          requiresAck,
+          recipient: defaultRecipient,
+        })
+
+        if (onUpdate) {
+          onUpdate({
+            content: [{ type: 'text', text: `Sending notification: ${title}` }],
+            details: {
+              notificationId,
+              sentAt: new Date().toISOString(),
+              recipient: defaultRecipient,
+            },
+          })
+        }
+
+        return {
+          content: [
+            { type: 'text', text: `Notification sent successfully!` },
+            { type: 'text', text: `ID: ${notificationId}` },
+            { type: 'text', text: `Title: ${title}` },
+            { type: 'text', text: `Priority: ${priority}` },
+            { type: 'text', text: `Status: ${requiresAck ? 'Awaiting acknowledgment' : 'Delivered'}` },
+          ],
+          details: {
+            notificationId,
+            sentAt: new Date().toISOString(),
+            recipient: defaultRecipient,
+          },
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        throw new Error(`Failed to send notification: ${errorMessage}`)
+      }
+    },
+  }
+}
+
+export interface NotifyToolOptions {
+  notificationService: NotificationService
+  defaultRecipient: string
+}
+```
+
+---
+
+#### File 2: `src/tools/NotifyTool/index.ts`
+
+```typescript
+import { registerTool } from '../registry.ts'
+import { createNotifyTool, TOOL_DEFAULT_PERMISSION, type NotifyToolOptions } from './NotifyTool.ts'
+import { NotifyToolUI } from './UI.tsx'
+
+// Register the notification tool in the global registry
+registerTool({
+  // Required fields
+  name: 'notify',
+  defaultPermission: TOOL_DEFAULT_PERMISSION,
+
+  createTool: (cwd: string) => {
+    const notificationService = new NotificationService()
+    const options: NotifyToolOptions = {
+      notificationService,
+      defaultRecipient: 'user',
+    }
+    return createNotifyTool(options)
+  },
+
+  // Optional but recommended fields
+
+  // Description for ToolSearchTool search.
+  // Should include functionality, use cases, and examples.
+  description: 'Send a notification to the user. Supports title, message, priority (low/normal/high), and optional acknowledgment requirement.',
+
+  // TUI rendering component for terminal display
+  ui: NotifyToolUI,
+
+  // Human-readable description for permission prompts and logs
+  formatDescription: (input) => {
+    if (typeof input.title === 'string' && typeof input.message === 'string') {
+      const priority = input.priority ? ` [${input.priority}]` : ''
+      const truncated = input.message.length > 30
+        ? input.message.slice(0, 30) + '...'
+        : input.message
+      return `notify${priority}: ${input.title} - "${truncated}"`
+    }
+    return '(send notification)'
+  },
+
+  // Extract content for permission rule matching
+  extractMatchContent: (input) => {
+    if (typeof input.title === 'string') {
+      return input.title
+    }
+    return undefined
+  },
+
+  // false = core tool, loaded immediately
+  // true  = deferred tool, discovered via tool_search before loading
+  shouldDefer: false,
+})
+```
+
+---
+
+#### File 3: `src/tools/NotifyTool/UI.tsx` (Optional)
+
+```typescript
+import type { ToolUIComponent, ToolResult } from '../registry.ts'
+import { h, type ComponentChildren } from 'preact'
+
+// TUI rendering component for the notification tool.
+// Displays the tool execution process in the terminal interface.
+export class NotifyToolUI implements ToolUIComponent {
+  private container: HTMLElement | null = null
+  private expanded = false
+  private toolCallId: string
+  private args: any
+
+  constructor(toolCallId: string, args: any) {
+    this.toolCallId = toolCallId
+    this.args = args
+  }
+
+  setContainer(container: HTMLElement): void {
+    this.container = container
+    this.render()
+  }
+
+  setExpanded(expanded: boolean): void {
+    this.expanded = expanded
+    this.render()
+  }
+
+  markExecutionStarted(): void {
+    this.render()
+  }
+
+  updateResult(result: ToolResult, isPartial?: boolean): void {
+    this.render(result, isPartial)
+  }
+
+  updateDetails?(details: Record<string, unknown>): void {
+    // Optional implementation
+  }
+
+  private render(result?: ToolResult, isPartial?: boolean): void {
+    if (!this.container) return
+
+    const title = this.args?.title || 'Notification'
+    const message = this.args?.message || ''
+    const priority = this.args?.priority || 'normal'
+
+    const priorityColors: Record<string, string> = {
+      low: '#888',
+      normal: '#4A90D9',
+      high: '#E53935',
+    }
+
+    this.container.innerHTML = `
+      <div style="padding: 8px; border: 1px solid #444; border-radius: 4px; margin: 4px 0;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="color: ${priorityColors[priority]};">[${priority.toUpperCase()}]</span>
+          <strong>${title}</strong>
+        </div>
+        ${this.expanded || result ? `<div style="margin-top: 8px; color: #ccc;">${message}</div>` : ''}
+        ${result ? `
+          <div style="margin-top: 8px; padding: 8px; background: #2a2a2a; border-radius: 4px;">
+            ${result.content.map(c => `<div>${c.text || ''}</div>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `
+  }
+}
+```
+
+---
+
+### Register in the Entry File
+
+Add the following import to `src/tools/index.ts`:
+
+```typescript
+// ... other imports
+import './NotifyTool/index.ts'
+```
+
+---
+
+### Field Reference
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `name` | Yes | `string` | Unique identifier, e.g. `'notify'`, `'mcp__slack__send'` |
+| `defaultPermission` | Yes | `'allow' \| 'deny' \| 'ask'` | Default permission policy |
+| `createTool` | Yes | `(...args) => AgentTool` | Factory function |
+| `description` | Recommended | `string` | Tool description (used by ToolSearchTool) |
+| `ui` | No | `ToolUIConstructor` | TUI rendering component (optional) |
+| `formatDescription` | Recommended | `(input) => string` | Human-readable description for permission prompts |
+| `extractMatchContent` | Recommended | `(input) => string \| undefined` | Content extraction for permission rule matching |
+| `shouldDefer` | No | `boolean` | Whether to defer loading (default: `false`) |
+
+---
+
+
+
+Plan: Add AskUserQuestionTool
+
+ Context
+
+ The model currently has no way to ask the user structured questions during execution. The frontend project
+ (microcode-frontend) has an AskUserQuestionTool that lets the model present multiple-choice questions to the
+ user and receive answers. We need to port this capability to the microcode pi-agent-core TUI project.
+
+ Key architectural challenge: pi-agent-core's BeforeToolCallResult only supports { block, reason } or undefined
+ — it has no updatedInput field. The frontend solves this by injecting answers into the tool's input via the
+ permission UI's onAllow(updatedInput). We need an equivalent mechanism.
+
+ Chosen approach: Permission-integrated — extend PermissionManager to support input mutation via
+ ctx.toolCall.arguments.
+
+ Files to Create
+
+ 1. src/tools/AskUserQuestionTool/AskUserQuestionTool.ts
+
+ Tool logic following the three-file convention.
+
+ - Schema: { questions: Question[] } where Question = { question, header, options, multiSelect? } and
+ QuestionOption = { label, description }
+ - defaultPermission: 'ask'
+ - Factory function createAskUserQuestionTool(cwd) returns an AgentTool
+ - execute() reads params.questions and params.answers (answers injected by permission system via argument
+ mutation)
+ - Returns { content: [...answer summaries], details: { questions, answers } }
+ - Export ASK_USER_QUESTION_TOOL_NAME = 'ask_user_question'
+
+ 2. src/tools/AskUserQuestionTool/index.ts
+
+ Registration entry — calls registerTool() with:
+ - name, defaultPermission: 'ask', createTool, description
+ - formatDescription: shows question count
+ - extractMatchContent: returns first question text
+
+ 3. src/tools/AskUserQuestionTool/UI.tsx
+
+ TUI component implementing ToolUIComponent:
+ - Renders questions with options, highlights current selection
+ - Uses arrow keys / number keys for selection
+ - Supports multi-select (comma-separated or space toggle)
+ - Shows "Other" option for free-text input
+ - Calls onComplete(answers) callback when user finishes
+
+ Files to Modify
+
+ 4. src/permissions/manager.ts
+
+ Extend PermissionManager to support input modification for interactive tools:
+
+ - Add optional onAskUserQuestion callback to PermissionManagerOptions:
+ onAskUserQuestion?: (
+   toolName: string,
+   input: Record<string, unknown>,
+ ) => Promise<Record<string, unknown> | undefined>
+ - Modify checkPermissionWithPrompt signature to accept BeforeToolCallContext (full context, not just the subset
+  it currently uses)
+ - In the ask branch: if onAskUserQuestion is set and the tool is ask_user_question, call it and mutate
+ ctx.toolCall.arguments with the returned input (answers injected)
+ - This mutation is safe because beforeToolCall runs before execute() reads the arguments
+
+ 5. src/agent.ts
+
+ Wire up the permission integration:
+
+ - In beforeToolCall, pass the full BeforeToolCallContext to permissionManager.checkPermissionWithPrompt(ctx)
+ - Ensure the onAskUserQuestion callback is set on the PermissionManager (passed via CreateMicrocodeAgentOptions
+  or wired internally)
+
+ 6. src/tools/index.ts
+
+ - Add import './AskUserQuestionTool/index.ts' for side-effect registration
+ - Export createAskUserQuestionTool and ASK_USER_QUESTION_TOOL_NAME
+
+ 7. src/constants/prompts.ts
+
+ - Add ask_user_question to the system prompt's tool usage guidance (the model needs to know when and how to use
+  it)
+
+ Data Flow
+
+ Model calls: ask_user_question({ questions: [...] })
+     │
+     ▼
+ beforeToolCall → PermissionManager.checkPermissionWithPrompt(ctx)
+     │
+     ├─ checkPermission() → returns { reason: 'ask' }
+     │
+     ├─ onAskUserQuestion(toolName, input) is called
+     │       │
+     │       ▼
+     │   TUI renders questions, user selects answers
+     │       │
+     │       ▼
+     │   Returns { ...input, answers: { "Q1": "A", "Q2": "B" } }
+     │
+     ├─ Mutates ctx.toolCall.arguments = returnedInput
+     │
+     ▼
+ tool.execute(toolCallId, params)
+     // params now includes answers
+     │
+     ▼
+ Returns tool result with answers to model
+
+ Verification
+
+ 1. Build: npm run build (or equivalent) should pass with no type errors
+ 2. Manual test: start the TUI, prompt the model to ask a question (e.g., "Ask me which framework I prefer:
+ React, Vue, or Svelte")
+ 3. Verify: questions render correctly, arrow keys work, answers are returned to the model, model continues with
+  the answer
+ 4. Edge cases: multi-select, "Other" free-text input, cancellation (Ctrl+C), single question auto-submit
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
