@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type {
   McpServerConfig,
   McpToolInfo,
@@ -32,8 +33,9 @@ export class McpClientManager {
       if (config.type === 'sse') {
         transport = new SSEClientTransport(new URL(config.url))
       } else if (config.type === 'http') {
-        // HTTP uses SSE transport with the URL
-        transport = new SSEClientTransport(new URL(config.url))
+        transport = new StreamableHTTPClientTransport(new URL(config.url), {
+          requestInit: config.headers ? { headers: config.headers } : undefined,
+        })
       } else if (config.type === 'ws') {
         // WebSocket - use SSE as fallback since WS transport may not be available
         transport = new SSEClientTransport(new URL(config.url))

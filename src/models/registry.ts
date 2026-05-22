@@ -70,7 +70,7 @@ const MODELS: Model<Api>[] = [
     cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
     contextWindow: 1048576,
     maxTokens: 128000,
-  },
+  }
 ] as Model<Api>[]
 
 // Default model when no env var is set
