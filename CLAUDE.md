@@ -870,121 +870,85 @@ import './NotifyTool/index.ts'
 
 ---
 
+# Special Tools
 
+## AskUserQuestionTool
 
-Plan: Add AskUserQuestionTool
+### Purpose
 
- Context
+Lets the model ask the user structured multiple-choice questions during execution. The model calls `ask_user_question` with a list of questions and options; the TUI presents them interactively; answers are returned to the model as a tool result.
 
- The model currently has no way to ask the user structured questions during execution. The frontend project
- (microcode-frontend) has an AskUserQuestionTool that lets the model present multiple-choice questions to the
- user and receive answers. We need to port this capability to the microcode pi-agent-core TUI project.
+### ★ Key Insight: Permission Check AS Functionality
 
- Key architectural challenge: pi-agent-core's BeforeToolCallResult only supports { block, reason } or undefined
- — it has no updatedInput field. The frontend solves this by injecting answers into the tool's input via the
- permission UI's onAllow(updatedInput). We need an equivalent mechanism.
+**This is the most important design pattern in this tool.** The `TOOL_DEFAULT_PERMISSION` is set to `'ask'` — not because the tool is dangerous, but because **the permission flow IS the tool's interactive mechanism**.
 
- Chosen approach: Permission-integrated — extend PermissionManager to support input mutation via
- ctx.toolCall.arguments.
+```
+Normal tool:     'ask' permission → "Allow / Deny?" → execute(input)
+AskUserQuestion: 'ask' permission → "Pick A / B / C?" → execute(input + answers)
+```
 
- Files to Create
+The `PermissionManager.checkPermissionWithPrompt()` intercepts the tool call and, instead of showing a generic "Allow/Deny" prompt, routes to `onAskUserQuestion()` which renders the interactive question UI. Answers are stored on the tool object, and `execute()` reads them back.
 
- 1. src/tools/AskUserQuestionTool/AskUserQuestionTool.ts
+**Why this matters**: pi-agent-core's `BeforeToolCallResult` only supports `{ block, reason }` — there is no `updatedInput` field. The frontend (microcode-frontend) solves this with `onAllow(updatedInput)` in React. Our solution avoids modifying the core framework entirely by exploiting the fact that `agent.state.tools` and the tools used in `prepareToolCall` share the same object references. The tool object itself becomes the communication channel between the permission layer and the execution layer.
 
- Tool logic following the three-file convention.
+**If `TOOL_DEFAULT_PERMISSION` were `'allow'`**, the permission flow would be skipped entirely — `execute()` would receive no answers and the tool would be useless. This is the only tool where `'ask'` is load-bearing for functionality, not safety.
 
- - Schema: { questions: Question[] } where Question = { question, header, options, multiSelect? } and
- QuestionOption = { label, description }
- - defaultPermission: 'ask'
- - Factory function createAskUserQuestionTool(cwd) returns an AgentTool
- - execute() reads params.questions and params.answers (answers injected by permission system via argument
- mutation)
- - Returns { content: [...answer summaries], details: { questions, answers } }
- - Export ASK_USER_QUESTION_TOOL_NAME = 'ask_user_question'
+### Architecture
 
- 2. src/tools/AskUserQuestionTool/index.ts
+```
+Model calls: ask_user_question({ questions: [...] })
+    │
+    ▼
+beforeToolCall → PermissionManager.checkPermissionWithPrompt(ctx)
+    │
+    ├─ checkPermission() → { reason: 'ask' }   (default is 'ask', NOT 'allow')
+    │
+    ├─ ★ Detects tool === 'ask_user_question'
+    │   Routes to onAskUserQuestion() instead of onPermissionRequest()
+    │       │
+    │       ▼
+    │   TUI renders questions with SelectLists, user picks answers
+    │       │
+    │       ▼
+    │   Returns { answers: { "Q1": "A", "Q2": "B" } }
+    │
+    ├─ tool.setAnswers(answers)   ← stored on the tool OBJECT, not arguments
+    │
+    ▼
+tool.execute(toolCallId, params)
+    │  params does NOT contain answers — they're read from the tool object
+    │  via tool.getAndClearAnswers()
+    ▼
+Returns formatted answers to model
+```
 
- Registration entry — calls registerTool() with:
- - name, defaultPermission: 'ask', createTool, description
- - formatDescription: shows question count
- - extractMatchContent: returns first question text
+### Why Answers Are Stored on the Tool Object (Not Arguments)
 
- 3. src/tools/AskUserQuestionTool/UI.tsx
+This is a critical detail. In pi-agent-core's agent loop (`agent-loop.js`):
 
- TUI component implementing ToolUIComponent:
- - Renders questions with options, highlights current selection
- - Uses arrow keys / number keys for selection
- - Supports multi-select (comma-separated or space toggle)
- - Shows "Other" option for free-text input
- - Calls onComplete(answers) callback when user finishes
+1. `prepareToolCall()` calls `validateToolArguments()` → produces `validatedArgs`
+2. `beforeToolCall()` hook runs (this is where PermissionManager intercepts)
+3. `executePreparedToolCall()` calls `tool.execute(id, prepared.args)` — using the **pre-computed** `validatedArgs`, NOT `toolCall.arguments`
 
- Files to Modify
+So mutating `ctx.toolCall.arguments` in `beforeToolCall` has **zero effect** on what `execute()` receives. The solution: since `agent.state.tools` and the tools array in `prepareToolCall`'s context share the same object references, we can store data directly on the tool instance via `setAnswers()` / `getAndClearAnswers()`. The tool object acts as a shared memory channel.
 
- 4. src/permissions/manager.ts
+### Files
 
- Extend PermissionManager to support input modification for interactive tools:
+| File | Role |
+|---|---|
+| `src/tools/AskUserQuestionTool/AskUserQuestionTool.ts` | Tool logic: schema, factory, execute, answer storage |
+| `src/tools/AskUserQuestionTool/index.ts` | Registration: `registerTool()` with formatDescription, extractMatchContent |
+| `src/tools/AskUserQuestionTool/UI.tsx` | TUI display: shows questions and collected answers |
+| `src/permissions/manager.ts` | `onAskUserQuestion` callback + `getTool` resolver for answer injection |
+| `src/tui/app.ts` | `promptAskUserQuestion()` / `promptSingleQuestion()` — interactive SelectList UI |
+| `src/main.tsx` | Wiring: `permissionManager.setOnAskUserQuestion(...)` |
 
- - Add optional onAskUserQuestion callback to PermissionManagerOptions:
- onAskUserQuestion?: (
-   toolName: string,
-   input: Record<string, unknown>,
- ) => Promise<Record<string, unknown> | undefined>
- - Modify checkPermissionWithPrompt signature to accept BeforeToolCallContext (full context, not just the subset
-  it currently uses)
- - In the ask branch: if onAskUserQuestion is set and the tool is ask_user_question, call it and mutate
- ctx.toolCall.arguments with the returned input (answers injected)
- - This mutation is safe because beforeToolCall runs before execute() reads the arguments
+### Design Decisions for Future Reference
 
- 5. src/agent.ts
+1. **Reuse the permission layer for interactive input** — When a tool needs user interaction before execution, don't build a separate mechanism. Hijack the `'ask'` permission path with a tool-specific handler.
 
- Wire up the permission integration:
+2. **Tool object as communication channel** — When `beforeToolCall` can't modify the arguments that `execute()` receives, store data on the tool instance itself. This works because tool instances are shared references.
 
- - In beforeToolCall, pass the full BeforeToolCallContext to permissionManager.checkPermissionWithPrompt(ctx)
- - Ensure the onAskUserQuestion callback is set on the PermissionManager (passed via CreateMicrocodeAgentOptions
-  or wired internally)
+3. **`getTool` resolver pattern** — `PermissionManager` receives a `(name) => AgentTool` callback to look up tool instances by name. This avoids coupling the permission manager to a specific tools array.
 
- 6. src/tools/index.ts
-
- - Add import './AskUserQuestionTool/index.ts' for side-effect registration
- - Export createAskUserQuestionTool and ASK_USER_QUESTION_TOOL_NAME
-
- 7. src/constants/prompts.ts
-
- - Add ask_user_question to the system prompt's tool usage guidance (the model needs to know when and how to use
-  it)
-
- Data Flow
-
- Model calls: ask_user_question({ questions: [...] })
-     │
-     ▼
- beforeToolCall → PermissionManager.checkPermissionWithPrompt(ctx)
-     │
-     ├─ checkPermission() → returns { reason: 'ask' }
-     │
-     ├─ onAskUserQuestion(toolName, input) is called
-     │       │
-     │       ▼
-     │   TUI renders questions, user selects answers
-     │       │
-     │       ▼
-     │   Returns { ...input, answers: { "Q1": "A", "Q2": "B" } }
-     │
-     ├─ Mutates ctx.toolCall.arguments = returnedInput
-     │
-     ▼
- tool.execute(toolCallId, params)
-     // params now includes answers
-     │
-     ▼
- Returns tool result with answers to model
-
- Verification
-
- 1. Build: npm run build (or equivalent) should pass with no type errors
- 2. Manual test: start the TUI, prompt the model to ask a question (e.g., "Ask me which framework I prefer:
- React, Vue, or Svelte")
- 3. Verify: questions render correctly, arrow keys work, answers are returned to the model, model continues with
-  the answer
- 4. Edge cases: multi-select, "Other" free-text input, cancellation (Ctrl+C), single question auto-submit
-╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+4. **`getAndClearAnswers()` idempotency** — Answers are consumed on read. This prevents stale answers from leaking into subsequent calls if the tool is reused.
