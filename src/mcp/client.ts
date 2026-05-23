@@ -32,7 +32,7 @@ export class McpClientManager {
       let transport
       if (config.type === 'sse') {
         transport = new SSEClientTransport(new URL(config.url))
-      } else if (config.type === 'http') {
+      } else if (config.type === 'http' || config.type === 'streamableHttp') {
         transport = new StreamableHTTPClientTransport(new URL(config.url), {
           requestInit: config.headers ? { headers: config.headers } : undefined,
         })

@@ -16,7 +16,7 @@ const defaultMacro: MacroConfig = {
   PACKAGE_URL: pkg.name,
   NATIVE_PACKAGE_URL: pkg.name,
   VERSION_CHANGELOG: '',
-  ISSUES_EXPLAINER: 'file an issue at https://github.com/milo-ally/microcode-pi',
+  ISSUES_EXPLAINER: 'file an issue at https://github.com/milo-ally/microcode',
   FEEDBACK_CHANNEL: 'github',
 }
 

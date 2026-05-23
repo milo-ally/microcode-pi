@@ -12,7 +12,7 @@ export interface McpSSEServerConfig {
 }
 
 export interface McpHTTPServerConfig {
-  type: 'http'
+  type: 'http' | 'streamableHttp'
   url: string
   headers?: Record<string, string>
 }
