@@ -1318,6 +1318,7 @@ export class App {
         // Restore focus to editor so user can type again
         this.ui.setFocus(this.editor)
         this.ui.requestRender()
+        if (!approved) this.agent.abort()
         resolve(approved)
       }
 
