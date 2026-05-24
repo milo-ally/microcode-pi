@@ -11,6 +11,8 @@ import './FileWriteTool/index.ts'
 import './FileReadTool/index.ts'
 import './ToolSearchTool/index.ts'
 import './AskUserQuestionTool/index.ts'
+import './GrepTool/index.ts'
+import './GlobTool/index.ts'
 
 // Re-exports for backward compatibility
 export { createBashTool, TOOL_DEFAULT_PERMISSION as BASH_DEFAULT_PERMISSION } from './BashTool/BashTool.ts'
@@ -24,6 +26,8 @@ export { createSkillToolWithAgent, TOOL_DEFAULT_PERMISSION as SKILL_DEFAULT_PERM
 export { createToolSearchTool, TOOL_SEARCH_TOOL_NAME } from './ToolSearchTool/ToolSearchTool.ts'
 export type { ToolSearchToolOptions } from './ToolSearchTool/ToolSearchTool.ts'
 export { createAskUserQuestionTool, ASK_USER_QUESTION_TOOL_NAME } from './AskUserQuestionTool/AskUserQuestionTool.ts'
+export { createGrepTool, TOOL_NAME as GREP_TOOL_NAME, TOOL_DEFAULT_PERMISSION as GREP_DEFAULT_PERMISSION } from './GrepTool/GrepTool.ts'
+export { createGlobTool, TOOL_NAME as GLOB_TOOL_NAME, TOOL_DEFAULT_PERMISSION as GLOB_DEFAULT_PERMISSION } from './GlobTool/GlobTool.ts'
 
 /** Get the names of all deferred tool definitions (for system prompt listing). */
 export function getDeferredToolNames(): string[] {

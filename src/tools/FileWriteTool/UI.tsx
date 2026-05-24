@@ -11,7 +11,7 @@ import {
   renderChangeSummary,
   renderNewFilePreview,
   type DiffResult,
-} from '../../tui/components/diffUtils.ts'
+} from '../../utils/diffUtils.ts'
 
 interface ToolResult {
   content: Array<{ type: string; text?: string }>
