@@ -491,7 +491,7 @@ Both `agent.state.tools` and `ctx.context.tools` must be updated: the former for
 
 **Three modes**:
 - `default` — Rule-based checking; dangerous tools require user confirmation
-- `auto-approve` — Allow everything (YOLO mode)
+- `auto-approve` — Allow everything (YOLO mode), **except tools whose `'ask'` permission doubles as their interactive mechanism** (e.g. `Ask`). These tools are excluded from auto-approve so the permission flow still fires and collects user input. See `checkPermission()` L159.
 - `plan` — Only allow tools with `defaultPermission: 'allow'` (read-only)
 
 **Rule priority** (`manager.ts:147-173`):
@@ -967,6 +967,20 @@ The `PermissionManager.checkPermissionWithPrompt()` intercepts the tool call and
 **Why this matters**: pi-agent-core's `BeforeToolCallResult` only supports `{ block, reason }` — there is no `updatedInput` field. The frontend (microcode-frontend) solves this with `onAllow(updatedInput)` in React. Our solution avoids modifying the core framework entirely by exploiting the fact that `agent.state.tools` and the tools used in `prepareToolCall` share the same object references. The tool object itself becomes the communication channel between the permission layer and the execution layer.
 
 **If `TOOL_DEFAULT_PERMISSION` were `'allow'`**, the permission flow would be skipped entirely — `execute()` would receive no answers and the tool would be useless. This is the only tool where `'ask'` is load-bearing for functionality, not safety.
+
+**Auto-approve mode exception**: `PermissionManager.checkPermission()` has a hardcoded exception at L159 to prevent auto-approve from bypassing the Ask tool's interactive flow:
+
+```typescript
+if (mode === 'auto-approve' && toolName !== ASK_USER_QUESTION_TOOL_NAME) {
+  return { allowed: true }
+}
+```
+
+**If you create another tool that uses the permission flow as its functionality** (i.e., `'ask'` defaultPermission is load-bearing, not safety-related), you must:
+1. Export its `TOOL_NAME` constant (e.g., `export const FOO_TOOL_NAME = 'foo'`)
+2. Re-export it from `src/tools/index.ts`
+3. Add it to the auto-approve exclusion in `manager.ts:159`: `&& toolName !== FOO_TOOL_NAME`
+4. Update this section of CLAUDE.md
 
 ### Architecture
 

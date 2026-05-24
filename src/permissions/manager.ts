@@ -19,7 +19,7 @@ import type {
   PermissionRuleValue,
   ToolPermissionContext,
 } from './types.ts'
-import { TOOL_DEFAULT_PERMISSIONS } from '../tools/index.ts'
+import { TOOL_DEFAULT_PERMISSIONS, ASK_USER_QUESTION_TOOL_NAME } from '../tools/index.ts'
 
 export interface PermissionManagerOptions {
   mode?: PermissionMode
@@ -155,8 +155,9 @@ export class PermissionManager {
   ): PermissionDecision {
     const { mode } = this.context
 
-    // Mode: auto-approve → allow everything
-    if (mode === 'auto-approve') {
+    // Mode: auto-approve → allow everything except the Ask tool, whose
+    // interactive Q&A flow depends on the 'ask' permission path.
+    if (mode === 'auto-approve' && toolName !== ASK_USER_QUESTION_TOOL_NAME) {
       return { allowed: true }
     }
 
@@ -223,7 +224,7 @@ export class PermissionManager {
     // Instead of a generic "allow/deny" prompt, we hijack the 'ask' path to run an
     // interactive Q&A session. Answers are stored on the tool object so execute()
     // can read them — the tool and the permission system are symbiotic.
-    if (toolName === 'Ask' && this.onAskUserQuestion) {
+    if (toolName === ASK_USER_QUESTION_TOOL_NAME && this.onAskUserQuestion) {
       const result = await this.onAskUserQuestion(toolName, input)
       if (result.block) {
         return { block: true, reason: `User cancelled question for "${toolName}"` }

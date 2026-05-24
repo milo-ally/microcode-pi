@@ -208,23 +208,26 @@ export function createConvertToLlm(getModel: () => Model<Api>) {
 
         case 'assistant':
           {
-            // Extract reasoning text from thinking blocks
-            const thinkingText = msg.content
-              .filter((c: any) => c.type === 'thinking')
-              .map((c: any) => c.thinking)
-              .join('\n')
+            // OpenAI protocol: extract thinking blocks into reasoning_content field.
+            // Anthropic protocol: pass thinking blocks through as-is (DeepSeek's
+            // Anthropic-compatible API requires them to be returned).
+            if (model.api === 'openai-completions') {
+              const thinkingText = msg.content
+                .filter((c: any) => c.type === 'thinking')
+                .map((c: any) => c.thinking)
+                .join('\n')
 
-            // Filter out thinking blocks from content, keep text + toolCall
-            const filtered = msg.content.filter((c: any) => c.type !== 'thinking')
-            const result: any = { ...msg, content: filtered }
+              const filtered = msg.content.filter((c: any) => c.type !== 'thinking')
+              const result: any = { ...msg, content: filtered }
 
-            // According to model.compat, decide whether to set reasoning_content:
-            // - DeepSeek format (requiresReasoningContentOnAssistantMessages=true): must be returned
-            // - Anthropic format: provider's convertMessages will ignore this field
-            if (requiresReasoningContent) {
-              result.reasoning_content = thinkingText || ''
+              if (requiresReasoningContent) {
+                result.reasoning_content = thinkingText || ''
+              }
+              return [result as Message]
             }
-            return [result as Message]
+
+            // anthropic-messages (and other protocols): preserve thinking blocks
+            return [msg as Message]
           }
 
         case 'bashExecution':
