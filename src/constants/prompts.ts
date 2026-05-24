@@ -140,7 +140,7 @@ If you can say it in one sentence, don't use three. Prefer short, direct sentenc
 function getAskUserQuestionSection(): string {
   return `# Ask User Question Tool
 
-Use the \`ask_user_question\` tool when you need to ask the user questions during execution. This allows you to:
+Use the \`Ask\` tool when you need to ask the user questions during execution. This allows you to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions
 3. Get decisions on implementation choices as you work

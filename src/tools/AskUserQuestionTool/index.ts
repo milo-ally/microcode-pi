@@ -12,7 +12,7 @@ import { createAskUserQuestionTool, TOOL_DEFAULT_PERMISSION } from './AskUserQue
 import { AskUserQuestionToolUI } from './UI.tsx'
 
 registerTool({
-  name: 'ask_user_question',
+  name: 'Ask',
   defaultPermission: TOOL_DEFAULT_PERMISSION,
   createTool: createAskUserQuestionTool, 
   ui: AskUserQuestionToolUI,

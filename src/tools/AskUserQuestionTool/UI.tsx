@@ -81,13 +81,13 @@ export class AskUserQuestionToolUI extends Container implements ToolUIComponent 
 
     if (questions.length === 0) {
       this.contentBox.addChild(
-        new Text(`${icon} ${chalk.bold('ask_user_question')} ${theme.dim('(no questions)')}`),
+        new Text(`${icon} ${chalk.bold('Ask')} ${theme.dim('(no questions)')}`),
       )
       return
     }
 
     const count = `${questions.length} question${questions.length > 1 ? 's' : ''}`
-    const header = `${icon} ${chalk.bold('ask_user_question')}  ${theme.dim(count)}`
+    const header = `${icon} ${chalk.bold('Ask')}  ${theme.dim(count)}`
     const lines: string[] = [header]
 
     for (let i = 0; i < questions.length; i++) {

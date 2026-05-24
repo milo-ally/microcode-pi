@@ -223,7 +223,7 @@ export class PermissionManager {
     // Instead of a generic "allow/deny" prompt, we hijack the 'ask' path to run an
     // interactive Q&A session. Answers are stored on the tool object so execute()
     // can read them — the tool and the permission system are symbiotic.
-    if (toolName === 'ask_user_question' && this.onAskUserQuestion) {
+    if (toolName === 'Ask' && this.onAskUserQuestion) {
       const result = await this.onAskUserQuestion(toolName, input)
       if (result.block) {
         return { block: true, reason: `User cancelled question for "${toolName}"` }
