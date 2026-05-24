@@ -60,7 +60,8 @@ Set the `MODEL` environment variable to a model ID. For example, to use Gemini:
 
 ```bash
 export GEMINI_API_KEY=your-key
-MODEL=gemini-2.5-pro microcode
+export MODEL=gemini-2.5-pro 
+microcode
 ```
 
 Built-in models: `deepseek-v4-pro`, `deepseek-v4-flash`, `mimo-v2.5`, `mimo-v2.5-pro`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`.
