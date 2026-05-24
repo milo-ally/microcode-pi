@@ -874,6 +874,51 @@ export class NotifyToolUI implements ToolUIComponent {
 
 ---
 
+### Microcompact Configuration
+
+Microcompact (Layer 1 of session compression) automatically clears old tool results to save context window tokens. By default it covers `bash`, `read`, `write`, `edit`. New tools must be explicitly opted in.
+
+**File to modify:** `src/session/CompactionManager.ts`
+
+**SOP — two steps:**
+
+**Step 1:** Import the new tool's `TOOL_NAME` at the top of the file:
+
+```typescript
+// existing imports:
+import { TOOL_NAME as BASH_TOOL_NAME } from '../tools/BashTool/BashTool.ts'
+import { TOOL_NAME as READ_TOOL_NAME } from '../tools/FileReadTool/FileReadTool.ts'
+import { TOOL_NAME as WRITE_TOOL_NAME } from '../tools/FileWriteTool/FileWriteTool.ts'
+import { TOOL_NAME as EDIT_TOOL_NAME } from '../tools/FileEditTool/FileEditTool.ts'
+// ↓ add the new one:
+import { TOOL_NAME as NOTIFY_TOOL_NAME } from '../tools/NotifyTool/NotifyTool.ts'
+```
+
+**Step 2:** Add the `TOOL_NAME` to the `COMPACTABLE_TOOL_NAMES` set:
+
+```typescript
+const COMPACTABLE_TOOL_NAMES = new Set([
+  BASH_TOOL_NAME,
+  READ_TOOL_NAME,
+  WRITE_TOOL_NAME,
+  EDIT_TOOL_NAME,
+  NOTIFY_TOOL_NAME,  // ← added
+])
+```
+
+**What happens after:** The tool's old results (all but the most recent 3) will be replaced with `[Old tool result content cleared]` on every agent loop iteration, reducing token usage with no LLM cost.
+
+**Guidance on whether to add a tool to microcompact:**
+
+| Tool characteristic | Add? | Reason |
+|---|---|---|
+| Produces large text output that becomes stale (e.g. file listings, command output) | Yes | Old results lose value quickly; clearing them saves tokens |
+| Produces small, immutable results (e.g. notification confirmation, settings read) | Maybe | Token savings are marginal, but harmless |
+| Results are semantically important for future decisions (e.g. user answers, permission grants) | No | The model needs full history to make correct decisions over time |
+| Tool is a meta-tool (e.g. `tool_search`, `skill`) | No | The result content is schemas/knowledge the model must retain |
+
+---
+
 ### Register in the Entry File
 
 Add the following import to `src/tools/index.ts`:
