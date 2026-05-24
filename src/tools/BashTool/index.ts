@@ -1,9 +1,9 @@
 import { registerTool } from '../registry.ts'
-import { createBashTool, TOOL_DEFAULT_PERMISSION } from './BashTool.ts'
+import { createBashTool, TOOL_NAME, TOOL_DEFAULT_PERMISSION } from './BashTool.ts'
 import { BashToolUI } from './UI.tsx'
 
 registerTool({
-  name: 'bash',
+  name: TOOL_NAME,
   defaultPermission: TOOL_DEFAULT_PERMISSION,
   createTool: createBashTool,
   ui: BashToolUI,

@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { Type, type Static } from 'typebox'
 import type { PermissionBehavior } from '../../permissions/types.ts'
 
+export const TOOL_NAME = 'bash'
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask'
 
 const shellConfig = getShellConfig()
@@ -41,7 +42,7 @@ function getShellConfig(): { shell: string; args: string[]; name: string } {
 
 export function createBashTool(cwd: string): AgentTool<typeof bashSchema, BashToolDetails> {
   return {
-    name: 'bash',
+    name: TOOL_NAME,
     label: shellConfig.name,
     description: `Execute a shell command in ${shellConfig.name} and return its output.`,
     parameters: bashSchema,

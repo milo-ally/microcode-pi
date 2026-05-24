@@ -4,6 +4,7 @@ import { dirname, isAbsolute, resolve } from 'path'
 import { Type, type Static } from 'typebox'
 import type { PermissionBehavior } from '../../permissions/types.ts'
 
+export const TOOL_NAME = 'write'
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask'
 
 const writeSchema = Type.Object({
@@ -22,7 +23,7 @@ export interface FileWriteToolDetails {
 
 export function createFileWriteTool(cwd: string): AgentTool<typeof writeSchema, FileWriteToolDetails> {
   return {
-    name: 'write',
+    name: TOOL_NAME,
     label: 'Write',
     description:
       'Write content to a file. Creates the file if it does not exist, overwrites if it does. Creates parent directories as needed.',

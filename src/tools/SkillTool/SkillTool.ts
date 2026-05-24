@@ -6,6 +6,7 @@ import type { Skill } from '../../skill/skill.ts'
 import { getSkills } from '../../agent.ts'
 import type { PermissionBehavior } from '../../permissions/types.ts'
 
+export const TOOL_NAME = 'skill'
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'allow'
 
 const skillSchema = Type.Object({

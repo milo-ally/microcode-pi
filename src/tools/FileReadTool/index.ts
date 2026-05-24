@@ -1,9 +1,9 @@
 import { registerTool } from '../registry.ts'
-import { createFileReadTool, TOOL_DEFAULT_PERMISSION } from './FileReadTool.ts'
+import { createFileReadTool, TOOL_NAME, TOOL_DEFAULT_PERMISSION } from './FileReadTool.ts'
 import { FileReadToolUI } from './UI.tsx'
 
 registerTool({
-  name: 'read',
+  name: TOOL_NAME,
   defaultPermission: TOOL_DEFAULT_PERMISSION,
   createTool: createFileReadTool,
   ui: FileReadToolUI,

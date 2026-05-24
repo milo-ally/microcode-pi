@@ -1,9 +1,9 @@
 import { registerTool } from '../registry.ts'
-import { createFileEditTool, TOOL_DEFAULT_PERMISSION } from './FileEditTool.ts'
+import { createFileEditTool, TOOL_NAME, TOOL_DEFAULT_PERMISSION } from './FileEditTool.ts'
 import { FileEditToolUI } from './UI.tsx'
 
 registerTool({
-  name: 'edit',
+  name: TOOL_NAME,
   defaultPermission: TOOL_DEFAULT_PERMISSION,
   createTool: createFileEditTool,
   ui: FileEditToolUI,

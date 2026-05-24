@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from 'path'
 import { Type, type Static } from 'typebox'
 import type { PermissionBehavior } from '../../permissions/types.ts'
 
+export const TOOL_NAME = 'read'
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'allow'
 
 const readSchema = Type.Object({
@@ -42,7 +43,7 @@ function addLineNumbers(content: string, startLine: number): string {
 
 export function createFileReadTool(cwd: string): AgentTool<typeof readSchema, FileReadToolDetails> {
   return {
-    name: 'read',
+    name: TOOL_NAME,
     label: 'Read',
     description:
       'Read the contents of a file. Returns the file content with line numbers. Use offset and limit for large files.',

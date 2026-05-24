@@ -28,6 +28,10 @@ import { getToolUIConstructor, type ToolUIComponent } from '../tools/registry.ts
 import { UserMessage } from './components/userMessage.ts'
 import type { McpClientManager } from '../mcp/client.ts'
 import type { McpServerState, McpServerConfig } from '../mcp/types.ts'
+import { TOOL_NAME as BASH_TOOL_NAME } from '../tools/BashTool/BashTool.ts'
+import { TOOL_NAME as READ_TOOL_NAME } from '../tools/FileReadTool/FileReadTool.ts'
+import { TOOL_NAME as WRITE_TOOL_NAME } from '../tools/FileWriteTool/FileWriteTool.ts'
+import { TOOL_NAME as EDIT_TOOL_NAME } from '../tools/FileEditTool/FileEditTool.ts'
 import { addMcpServer, removeMcpServer, type ConfigScope } from '../mcp/configWrite.ts'
 import { SessionManager } from '../session/SessionManager.ts'
 import { getCompactionManager, getSkills, getSkillDiagnostics } from '../agent.ts'
@@ -1334,11 +1338,11 @@ export class App {
 
   private extractRuleContent(toolName: string, input: Record<string, unknown>): string | undefined {
     switch (toolName) {
-      case 'bash':
+      case BASH_TOOL_NAME:
         return typeof input.command === 'string' ? input.command : undefined
-      case 'file_edit':
-      case 'file_write':
-      case 'file_read':
+      case EDIT_TOOL_NAME:
+      case WRITE_TOOL_NAME:
+      case READ_TOOL_NAME:
         return typeof input.path === 'string' ? input.path : undefined
       default:
         return undefined

@@ -1,10 +1,10 @@
 import type { Skill } from '../../skill/skill.ts'
 import { registerTool } from '../registry.ts'
-import { createSkillToolWithAgent, TOOL_DEFAULT_PERMISSION } from './SkillTool.ts'
+import { createSkillToolWithAgent, TOOL_NAME, TOOL_DEFAULT_PERMISSION } from './SkillTool.ts'
 
 export function registerSkillTool(getSkills: () => Skill[]): void {
   registerTool({
-    name: 'skill',
+    name: TOOL_NAME,
     defaultPermission: TOOL_DEFAULT_PERMISSION,
     createTool: () => createSkillToolWithAgent({ getSkills }),
     formatDescription: (input) =>

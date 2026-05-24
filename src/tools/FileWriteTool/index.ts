@@ -1,9 +1,9 @@
 import { registerTool } from '../registry.ts'
-import { createFileWriteTool, TOOL_DEFAULT_PERMISSION } from './FileWriteTool.ts'
+import { createFileWriteTool, TOOL_NAME, TOOL_DEFAULT_PERMISSION } from './FileWriteTool.ts'
 import { FileWriteToolUI } from './UI.tsx'
 
 registerTool({
-  name: 'write',
+  name: TOOL_NAME,
   defaultPermission: TOOL_DEFAULT_PERMISSION,
   createTool: createFileWriteTool,
   ui: FileWriteToolUI,

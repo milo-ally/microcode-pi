@@ -8,6 +8,10 @@ import {
 } from '@earendil-works/pi-agent-core'
 import { estimateMessagesTokens } from './TokenEstimator.ts'
 import { getCompactUserSummaryMessage } from './compactPrompt.ts'
+import { TOOL_NAME as BASH_TOOL_NAME } from '../tools/BashTool/BashTool.ts'
+import { TOOL_NAME as READ_TOOL_NAME } from '../tools/FileReadTool/FileReadTool.ts'
+import { TOOL_NAME as WRITE_TOOL_NAME } from '../tools/FileWriteTool/FileWriteTool.ts'
+import { TOOL_NAME as EDIT_TOOL_NAME } from '../tools/FileEditTool/FileEditTool.ts'
 
 export interface CompactionProgress {
   phase: 'microcompact' | 'compacting' | 'done'
@@ -18,10 +22,9 @@ export interface CompactionProgress {
 
 const CLEARED_MESSAGE = '[Old tool result content cleared]'
 
-// Tool names whose results are eligible for microcompact
+// Tool names whose results are eligible for microcompact (must match registered names in tools/*/index.ts)
 const COMPACTABLE_TOOL_NAMES = new Set([
-  'bash', 'file_read', 'file_write', 'file_edit',
-  'read', 'write', 'edit', 'BashTool', 'FileReadTool', 'FileWriteTool', 'FileEditTool',
+  BASH_TOOL_NAME, READ_TOOL_NAME, WRITE_TOOL_NAME, EDIT_TOOL_NAME,
 ])
 
 // Keep the last N tool results of each type

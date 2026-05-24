@@ -4,6 +4,7 @@ import { isAbsolute, resolve } from 'path'
 import { Type, type Static } from 'typebox'
 import type { PermissionBehavior } from '../../permissions/types.ts'
 
+export const TOOL_NAME = 'edit'
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask'
 
 const editSchema = Type.Object({
@@ -26,7 +27,7 @@ export interface FileEditToolDetails {
 
 export function createFileEditTool(cwd: string): AgentTool<typeof editSchema, FileEditToolDetails> {
   return {
-    name: 'edit',
+    name: TOOL_NAME,
     label: 'Edit',
     description:
       'Edit a file by replacing an exact string match. The old_string must be unique in the file unless replace_all is true.',
