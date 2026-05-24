@@ -1,56 +1,93 @@
 import { readdirSync, existsSync } from 'fs'
-import { stat } from 'fs/promises'
+import { stat, readFile } from 'fs/promises'
 import { isAbsolute, resolve } from 'path'
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-const VCS_COMPONENTS = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'])
+const VCS_REGEX = /(?:^|\/)\.(?:git|svn|hg|bzr|jj|sl)(?:\/|$)/
 const MAX_FILE_SIZE = 1_000_000 // skip files >1MB for grep
 const MAX_LINE_LENGTH = 500
 const MAX_RESULT_SIZE_CHARS = 20_000
 const MAX_GLOB_RESULT_CHARS = 100_000
+const GLOB_REGEX_CACHE_SIZE = 64
 
 const TYPE_MAP: Record<string, string[]> = {
   js: ['*.js', '*.jsx', '*.mjs', '*.cjs'],
   ts: ['*.ts', '*.tsx', '*.mts', '*.cts'],
-  py: ['*.py', '*.pyi', '*.pyx'],
+  py: ['*.py', '*.pyi', '*.pyx', '*.pyw'],
   rust: ['*.rs'],
   go: ['*.go'],
   java: ['*.java', '*.kt', '*.kts', '*.scala'],
   rb: ['*.rb', '*.rake', '*.gemspec'],
-  php: ['*.php', '*.phtml'],
+  php: ['*.php', '*.phtml', '*.phtml'],
   swift: ['*.swift'],
   c: ['*.c', '*.h'],
-  cpp: ['*.cpp', '*.cxx', '*.cc', '*.hpp', '*.hxx', '*.hh'],
+  cpp: ['*.cpp', '*.cxx', '*.cc', '*.c++', '*.hpp', '*.hxx', '*.hh', '*.h++'],
   cs: ['*.cs'],
   sh: ['*.sh', '*.bash', '*.zsh', '*.fish'],
   md: ['*.md', '*.mdx'],
-  json: ['*.json', '*.jsonc'],
+  json: ['*.json', '*.jsonc', '*.json5'],
   yaml: ['*.yaml', '*.yml'],
-  xml: ['*.xml', '*.svg'],
-  html: ['*.html', '*.htm'],
+  xml: ['*.xml', '*.svg', '*.xsd', '*.xsl'],
+  html: ['*.html', '*.htm', '*.xhtml'],
   css: ['*.css', '*.scss', '*.less', '*.sass'],
   sql: ['*.sql'],
   proto: ['*.proto'],
-  tf: ['*.tf', '*.tfvars'],
+  tf: ['*.tf', '*.tfvars', '*.hcl'],
   vue: ['*.vue'],
   svelte: ['*.svelte'],
+  lua: ['*.lua'],
+  dart: ['*.dart'],
+  elixir: ['*.ex', '*.exs', '*.heex'],
+  erlang: ['*.erl', '*.hrl'],
+  haskell: ['*.hs', '*.lhs'],
+  ocaml: ['*.ml', '*.mli'],
+  fsharp: ['*.fs', '*.fsx', '*.fsi'],
+  clojure: ['*.clj', '*.cljs', '*.cljc', '*.edn'],
+  nix: ['*.nix'],
+  zig: ['*.zig', '*.zon'],
+  nim: ['*.nim', '*.nims'],
+  groovy: ['*.groovy', '*.gradle', '*.gvy', '*.gy'],
+  toml: ['*.toml'],
+  docker: ['Dockerfile', '.dockerignore', 'docker-compose.yml', 'docker-compose.yaml', '*.dockerfile'],
+  make: ['Makefile', '*.mk', 'GNUmakefile'],
+  cmake: ['CMakeLists.txt', '*.cmake'],
+  graphql: ['*.graphql', '*.gql'],
+  prisma: ['*.prisma'],
+  julia: ['*.jl'],
+  astro: ['*.astro'],
+  twig: ['*.twig'],
+  jinja: ['*.jinja', '*.jinja2', '*.j2'],
+  handlebars: ['*.hbs', '*.handlebars'],
+  ejs: ['*.ejs'],
+  erb: ['*.erb'],
+  vim: ['*.vim', '.vimrc'],
+  r: ['*.r', '*.R', '*.Rmd', '*.Rproj'],
+  rst: ['*.rst', '*.rest'],
+  tex: ['*.tex', '*.sty', '*.cls', '*.bib'],
+  ps1: ['*.ps1', '*.psm1', '*.psd1'],
+  bat: ['*.bat', '*.cmd'],
+  patch: ['*.patch', '*.diff'],
 }
 
 // Binary-ish extensions to skip during grep
 const SKIP_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.webp', '.bmp',
-  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-  '.zip', '.tar', '.gz', '.bz2', '.xz', '.7z', '.rar',
+  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.webp', '.bmp', '.heic', '.heif', '.avif',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
+  '.zip', '.tar', '.gz', '.bz2', '.xz', '.7z', '.rar', '.zst', '.lz4', '.br',
   '.exe', '.dll', '.so', '.dylib', '.wasm',
-  '.mp3', '.mp4', '.wav', '.avi', '.mov', '.mkv', '.ogg', '.flac',
+  '.mp3', '.mp4', '.wav', '.avi', '.mov', '.mkv', '.ogg', '.flac', '.aac', '.webm', '.flv',
   '.ttf', '.otf', '.woff', '.woff2', '.eot',
-  '.o', '.a', '.obj', '.lib', '.class', '.pyc', '.pyo',
-  '.db', '.sqlite', '.sqlite3',
-  '.bin', '.dat', '.pak', '.unity3d',
-  '.min.js', '.min.css', '.chunk.js',
+  '.o', '.a', '.obj', '.lib', '.class', '.pyc', '.pyo', '.pyd',
+  '.db', '.sqlite', '.sqlite3', '.sqlite',
+  '.bin', '.dat', '.pak', '.unity3d', '.asset',
+  '.map', '.tsbuildinfo',
+  '.iso', '.dmg', '.deb', '.rpm',
+  '.jar', '.war', '.ear',
+  '.nupkg', '.vsix', '.gem', '.whl', '.egg',
+  '.iml', '.DS_Store',
   '.lockb',
 ])
 
@@ -58,11 +95,29 @@ const SKIP_EXTENSIONS = new Set([
 // Glob-to-Regex conversion
 // ============================================================================
 
+const globRegexCache = new Map<string, RegExp>()
+
 /**
  * Convert a glob pattern to a RegExp for matching relative file paths.
+ * Results are cached — the same pattern string reuses its RegExp.
  * Supports: **, *, ?, [abc], [!abc], {a,b,c}, \ escaping.
  */
-function globToRegex(pattern: string): RegExp {
+function getGlobRegex(pattern: string): RegExp {
+  const cached = globRegexCache.get(pattern)
+  if (cached) return cached
+
+  const regex = compileGlobRegex(pattern)
+
+  // LRU-style eviction: delete oldest entry when cache is full
+  if (globRegexCache.size >= GLOB_REGEX_CACHE_SIZE) {
+    const firstKey = globRegexCache.keys().next().value
+    if (firstKey !== undefined) globRegexCache.delete(firstKey)
+  }
+  globRegexCache.set(pattern, regex)
+  return regex
+}
+
+function compileGlobRegex(pattern: string): RegExp {
   let regex = ''
   let i = 0
   const len = pattern.length
@@ -72,53 +127,37 @@ function globToRegex(pattern: string): RegExp {
 
     // ** — match across path segments
     if (ch === '*' && pattern[i + 1] === '*') {
-      const prevIsSlash = i > 0 && pattern[i - 1] === '/'
       const nextIsSlash = i + 2 < len && pattern[i + 2] === '/'
       const atEnd = i + 2 >= len
 
-      if (atEnd && !prevIsSlash && i === 0) {
-        // Just "**" alone — match everything
+      if (atEnd && i === 0) {
         regex += '.*'
         i += 2
-      } else if (atEnd) {
-        // Ends with /** or /foo/** — match everything beyond
-        if (prevIsSlash) regex += '.*'
-        else regex += '.*'
-        i += 2
-      } else if (nextIsSlash && (prevIsSlash || i === 0)) {
-        // /**/ or **/ at start — match zero or more path segments
+      } else if (nextIsSlash) {
         regex += '(?:.+/)?'
         i += 3
       } else {
-        // Mid-word ** (unusual)
         regex += '.*'
         i += 2
       }
       continue
     }
 
-    // * — match within a single path segment (no /)
     if (ch === '*') {
       regex += '[^/]*'
       i++
       continue
     }
 
-    // ? — match single non-slash char
     if (ch === '?') {
       regex += '[^/]'
       i++
       continue
     }
 
-    // [charset]
     if (ch === '[') {
       const close = pattern.indexOf(']', i)
-      if (close === -1) {
-        regex += '\\['
-        i++
-        continue
-      }
+      if (close === -1) { regex += '\\['; i++; continue }
       let inner = pattern.slice(i + 1, close)
       if (inner.startsWith('!')) inner = '^' + inner.slice(1)
       regex += '[' + inner + ']'
@@ -126,29 +165,21 @@ function globToRegex(pattern: string): RegExp {
       continue
     }
 
-    // {a,b,c}
     if (ch === '{') {
       const end = findMatchingBrace(pattern, i)
-      if (end === -1) {
-        regex += '\\{'
-        i++
-        continue
-      }
-      const inner = pattern.slice(i + 1, end)
-      const alts = splitBraceAlternatives(inner)
-      regex += '(?:' + alts.map((a) => globSegmentToRegex(a)).join('|') + ')'
+      if (end === -1) { regex += '\\{'; i++; continue }
+      regex += '(?:' + splitBraceAlternatives(pattern.slice(i + 1, end))
+        .map((a) => compileGlobSegment(a)).join('|') + ')'
       i = end + 1
       continue
     }
 
-    // Escaping
     if (ch === '\\' && i + 1 < len) {
       regex += escapeRegexChar(pattern[i + 1]!)
       i += 2
       continue
     }
 
-    // Literals
     if ('.+^${}()|'.includes(ch)) {
       regex += '\\' + ch
     } else {
@@ -160,25 +191,16 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp('^' + regex + '$')
 }
 
-/**
- * Convert a single glob path segment (no / inside) to regex.
- */
-function globSegmentToRegex(seg: string): string {
+function compileGlobSegment(seg: string): string {
   let r = ''
   let i = 0
   while (i < seg.length) {
     const ch = seg[i]!
     if (ch === '*') {
-      if (seg[i + 1] === '*') {
-        r += '.*'
-        i += 2
-      } else {
-        r += '[^/]*'
-        i++
-      }
+      if (seg[i + 1] === '*') { r += '.*'; i += 2 }
+      else { r += '[^/]*'; i++ }
     } else if (ch === '?') {
-      r += '[^/]'
-      i++
+      r += '[^/]'; i++
     } else if (ch === '[') {
       const close = seg.indexOf(']', i)
       if (close === -1) { r += '\\['; i++; continue }
@@ -189,12 +211,11 @@ function globSegmentToRegex(seg: string): string {
     } else if (ch === '{') {
       const end = findMatchingBrace(seg, i)
       if (end === -1) { r += '\\{'; i++; continue }
-      const inner = seg.slice(i + 1, end)
-      r += '(?:' + inner.split(',').map((a) => globSegmentToRegex(a)).join('|') + ')'
+      r += '(?:' + splitBraceAlternatives(seg.slice(i + 1, end))
+        .map((a) => compileGlobSegment(a)).join('|') + ')'
       i = end + 1
     } else if (ch === '\\' && i + 1 < seg.length) {
-      r += escapeRegexChar(seg[i + 1]!)
-      i += 2
+      r += escapeRegexChar(seg[i + 1]!); i += 2
     } else {
       if ('.+^${}()|'.includes(ch)) r += '\\' + ch
       else r += ch
@@ -208,10 +229,7 @@ function findMatchingBrace(s: string, start: number): number {
   let depth = 0
   for (let i = start; i < s.length; i++) {
     if (s[i] === '{') depth++
-    else if (s[i] === '}') {
-      depth--
-      if (depth === 0) return i
-    }
+    else if (s[i] === '}') { depth--; if (depth === 0) return i }
     else if (s[i] === '\\' && i + 1 < s.length) i++
   }
   return -1
@@ -219,16 +237,12 @@ function findMatchingBrace(s: string, start: number): number {
 
 function splitBraceAlternatives(inner: string): string[] {
   const parts: string[] = []
-  let depth = 0
-  let start = 0
+  let depth = 0, start = 0
   for (let i = 0; i < inner.length; i++) {
     const ch = inner[i]!
     if (ch === '{') depth++
     else if (ch === '}') depth--
-    else if (ch === ',' && depth === 0) {
-      parts.push(inner.slice(start, i))
-      start = i + 1
-    }
+    else if (ch === ',' && depth === 0) { parts.push(inner.slice(start, i)); start = i + 1 }
     else if (ch === '\\' && i + 1 < inner.length) i++
   }
   parts.push(inner.slice(start))
@@ -236,31 +250,51 @@ function splitBraceAlternatives(inner: string): string[] {
 }
 
 function escapeRegexChar(ch: string): string {
-  if ('.+^${}()|[]*?\\'.includes(ch)) return '\\' + ch
-  return ch
+  return '.+^${}()|[]*?\\'.includes(ch) ? '\\' + ch : ch
+}
+
+// ============================================================================
+// Fast path: extension-only glob matching
+// ============================================================================
+
+/** A glob pattern is "simple" if it's just `*.ext` or `*.*.ext` — no special chars. */
+function isSimpleGlob(pattern: string): boolean {
+  // Must start with * and not contain: **, ?, [, ], {, }
+  if (!pattern.startsWith('*')) return false
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!
+    if (ch === '?' || ch === '[' || ch === ']' || ch === '{' || ch === '}') return false
+  }
+  // "**" is not simple
+  if (pattern.includes('**')) return false
+  return true
+}
+
+/**
+ * If every glob is a simple `*.ext` pattern, return the set of matching extensions.
+ * Otherwise return null (caller must use full regex matching).
+ */
+function tryGetSimpleExtensions(patterns: string[]): string[] | null {
+  const exts: string[] = []
+  for (const p of patterns) {
+    if (!isSimpleGlob(p)) return null
+    // Strip leading '*' to get the extension suffix
+    exts.push(p.slice(1))
+  }
+  return exts
 }
 
 // ============================================================================
 // Path utilities
 // ============================================================================
 
-function hasVcsComponent(filePath: string): boolean {
-  const parts = filePath.split('/')
-  for (const p of parts) {
-    if (VCS_COMPONENTS.has(p)) return true
-  }
-  return false
-}
-
 function shouldSkipForGrep(filePath: string): boolean {
   const lower = filePath.toLowerCase()
-  // Check extension
   const lastDot = lower.lastIndexOf('.')
   if (lastDot !== -1) {
-    const ext = lower.slice(lastDot)
-    if (SKIP_EXTENSIONS.has(ext)) return true
-    // Also check for .min.* patterns
-    if (lower.includes('.min.') && !lower.endsWith('.ts') && !lower.endsWith('.js')) return true
+    if (SKIP_EXTENSIONS.has(lower.slice(lastDot))) return true
+    // Skip .min.* bundles (but allow .min.ts/.min.js for grepping)
+    if (lower.includes('.min.') && !lower.endsWith('.min.ts') && !lower.endsWith('.min.js')) return true
   }
   return false
 }
@@ -296,13 +330,19 @@ function listFiles(rootDir: string, extraGlobs?: string[]): string[] {
     return []
   }
 
-  // Filter VCS dirs
-  files = files.filter((f) => !hasVcsComponent(f))
+  // Filter VCS dirs — single regex test, zero allocations
+  files = files.filter((f) => !VCS_REGEX.test(f))
 
   // Apply extra glob filters if specified
   if (extraGlobs && extraGlobs.length > 0) {
-    const regexes = extraGlobs.map((g) => globToRegex(g))
-    files = files.filter((f) => regexes.some((r) => r.test(f)))
+    // Fast path: if all globs are simple *.ext, use endsWith
+    const simpleExts = tryGetSimpleExtensions(extraGlobs)
+    if (simpleExts) {
+      files = files.filter((f) => simpleExts.some((ext) => f.endsWith(ext)))
+    } else {
+      const regexes = extraGlobs.map((g) => getGlobRegex(g))
+      files = files.filter((f) => regexes.some((r) => r.test(f)))
+    }
   }
 
   return files
@@ -323,10 +363,6 @@ export interface GlobSearchResult {
   durationMs: number
 }
 
-/**
- * Find files matching a glob pattern. Results are sorted by modification time
- * (newest first) and capped at maxResults (default 1000).
- */
 export async function globSearch(
   cwd: string,
   inputPath: string | undefined,
@@ -341,7 +377,6 @@ export async function globSearch(
     throw new Error(`Path not found: ${searchDir}`)
   }
 
-  // Fast one-shot traversal — Bun's readdirSync with recursive is O(files)
   let allFiles: string[]
   try {
     allFiles = readdirSync(searchDir, { recursive: true }) as string[]
@@ -352,10 +387,10 @@ export async function globSearch(
   if (options.signal?.aborted) throw new Error('Operation aborted')
 
   // Filter VCS dirs
-  allFiles = allFiles.filter((f) => !hasVcsComponent(f))
+  allFiles = allFiles.filter((f) => !VCS_REGEX.test(f))
 
   // Filter by glob pattern
-  const regex = globToRegex(pattern)
+  const regex = getGlobRegex(pattern)
   const matched = allFiles.filter((f) => regex.test(f))
 
   if (matched.length === 0) {
@@ -373,7 +408,6 @@ export async function globSearch(
     return a.localeCompare(b)
   })
 
-  // Apply limit
   const truncated = matched.length > maxResults
   const result = truncated ? matched.slice(0, maxResults) : matched
 
@@ -412,10 +446,6 @@ export interface GrepSearchResult {
 
 const DEFAULT_HEAD_LIMIT = 250
 
-/**
- * Search file contents with regex. Supports 3 output modes, context lines,
- * file type filtering, and pagination (offset/head_limit).
- */
 export async function grepSearch(
   cwd: string,
   inputPath: string | undefined,
@@ -441,7 +471,6 @@ export async function grepSearch(
   if (options.type) {
     const typeGlobs = TYPE_MAP[options.type]
     if (typeGlobs) extraGlobs.push(...typeGlobs)
-    // Unknown type — still search but don't add globs
   }
 
   // Get candidate files
@@ -469,13 +498,10 @@ export async function grepSearch(
     throw new Error(`Invalid regex pattern: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  // Resolve context
   const ctxBefore = options.contextAround ?? options.contextBefore ?? 0
   const ctxAfter = options.contextAround ?? options.contextAfter ?? 0
-  const showLineNums = options.showLineNumbers !== false // default true
+  const showLineNums = options.showLineNumbers !== false
 
-  // Process files in parallel batches for I/O efficiency
-  const BATCH_SIZE = 16
   type MatchEntry = {
     filePath: string
     lineNumber: number
@@ -483,7 +509,9 @@ export async function grepSearch(
     matchCount: number
   }
   const allMatches: MatchEntry[] = []
-  let filesSearched = 0
+
+  // Process files in parallel batches for I/O efficiency
+  const BATCH_SIZE = 16
 
   for (let bi = 0; bi < candidateFiles.length; bi += BATCH_SIZE) {
     if (options.signal?.aborted) throw new Error('Operation aborted')
@@ -493,66 +521,39 @@ export async function grepSearch(
       batch.map(async (relPath) => {
         const absPath = resolve(searchDir, relPath)
 
-        // Check file size
-        let fileStat
+        // Read file (skip explicit stat — readFile throws on failure, and we check content.length)
+        let content: string
         try {
-          fileStat = await stat(absPath)
+          content = await readFile(absPath, 'utf-8')
         } catch {
-          return { relPath, matches: [] as MatchEntry[] }
-        }
-        if (fileStat.size > MAX_FILE_SIZE || !fileStat.isFile()) {
           return { relPath, matches: [] as MatchEntry[] }
         }
 
-        // Read file
-        let content: string
-        try {
-          const f = Bun.file(absPath)
-          content = await f.text()
-        } catch {
+        // Skip files that are too large (likely minified/binary)
+        if (content.length > MAX_FILE_SIZE) {
           return { relPath, matches: [] as MatchEntry[] }
         }
 
         if (options.signal?.aborted) throw new Error('Operation aborted')
 
-        const lines = content.split('\n')
         const fileMatches: MatchEntry[] = []
 
         if (outputMode === 'files_with_matches') {
-          // Early exit on first match
-          for (let li = 0; li < lines.length; li++) {
-            const line = lines[li]!
-            if (line.length > MAX_LINE_LENGTH * 2) continue
-            const match = line.match(regex)
-            if (match) {
-              fileMatches.push({
-                filePath: relPath,
-                lineNumber: li + 1,
-                lineText: line.slice(0, MAX_LINE_LENGTH),
-                matchCount: 1,
-              })
-              break
-            }
+          // Fast path: test regex on full content without splitting into lines
+          if (regex.test(content)) {
+            fileMatches.push({ filePath: relPath, lineNumber: 0, lineText: '', matchCount: 1 })
           }
         } else if (outputMode === 'count') {
+          // Use matchAll for fast streaming count
+          const matchIter = content.matchAll(regex)
           let count = 0
-          for (let li = 0; li < lines.length; li++) {
-            const line = lines[li]!
-            if (line.length > MAX_LINE_LENGTH * 2) continue
-            regex.lastIndex = 0
-            const lineMatches = line.match(regex)
-            if (lineMatches) count += lineMatches.length
-          }
+          for (const _ of matchIter) count++
           if (count > 0) {
-            fileMatches.push({
-              filePath: relPath,
-              lineNumber: 0,
-              lineText: String(count),
-              matchCount: count,
-            })
+            fileMatches.push({ filePath: relPath, lineNumber: 0, lineText: String(count), matchCount: count })
           }
         } else {
-          // content mode — find matches with context
+          // Content mode: need line-level detail for context and line numbers
+          const lines = content.split('\n')
           const alreadyIncluded = new Set<number>()
 
           for (let li = 0; li < lines.length; li++) {
@@ -560,52 +561,47 @@ export async function grepSearch(
             if (line.length > MAX_LINE_LENGTH * 2) continue
 
             regex.lastIndex = 0
-            if (regex.test(line)) {
-              regex.lastIndex = 0
+            if (!regex.test(line)) continue
 
-              // Add context lines before
-              const start = Math.max(0, li - ctxBefore)
-              for (let ci = start; ci < li; ci++) {
-                if (!alreadyIncluded.has(ci)) {
-                  alreadyIncluded.add(ci)
-                  const l = lines[ci]!
-                  fileMatches.push({
-                    filePath: relPath,
-                    lineNumber: ci + 1,
-                    lineText: l.slice(0, MAX_LINE_LENGTH),
-                    matchCount: 1,
-                  })
-                }
-              }
+            regex.lastIndex = 0
 
-              // Add the matching line
-              if (!alreadyIncluded.has(li)) {
-                alreadyIncluded.add(li)
+            // Add context lines before
+            const cStart = Math.max(0, li - ctxBefore)
+            for (let ci = cStart; ci < li; ci++) {
+              if (!alreadyIncluded.has(ci)) {
+                alreadyIncluded.add(ci)
                 fileMatches.push({
                   filePath: relPath,
-                  lineNumber: li + 1,
-                  lineText: line.slice(0, MAX_LINE_LENGTH),
+                  lineNumber: ci + 1,
+                  lineText: lines[ci]!.slice(0, MAX_LINE_LENGTH),
                   matchCount: 1,
                 })
               }
+            }
 
-              // Add context lines after
-              const end = Math.min(lines.length, li + 1 + ctxAfter)
-              for (let ci = li + 1; ci < end; ci++) {
-                if (!alreadyIncluded.has(ci)) {
-                  alreadyIncluded.add(ci)
-                  const l = lines[ci]!
-                  fileMatches.push({
-                    filePath: relPath,
-                    lineNumber: ci + 1,
-                    lineText: l.slice(0, MAX_LINE_LENGTH),
-                    matchCount: 1,
-                  })
-                }
+            // Matching line
+            if (!alreadyIncluded.has(li)) {
+              alreadyIncluded.add(li)
+              fileMatches.push({
+                filePath: relPath,
+                lineNumber: li + 1,
+                lineText: line.slice(0, MAX_LINE_LENGTH),
+                matchCount: 1,
+              })
+            }
+
+            // Add context lines after
+            const cEnd = Math.min(lines.length, li + 1 + ctxAfter)
+            for (let ci = li + 1; ci < cEnd; ci++) {
+              if (!alreadyIncluded.has(ci)) {
+                alreadyIncluded.add(ci)
+                fileMatches.push({
+                  filePath: relPath,
+                  lineNumber: ci + 1,
+                  lineText: lines[ci]!.slice(0, MAX_LINE_LENGTH),
+                  matchCount: 1,
+                })
               }
-
-              // Emit separator between non-contiguous match regions
-              // (handled during output formatting)
             }
           }
         }
@@ -615,16 +611,12 @@ export async function grepSearch(
     )
 
     for (const r of batchResults) {
-      if (r.status === 'fulfilled') {
-        if (r.value.matches.length > 0) {
-          allMatches.push(...r.value.matches)
-        }
-        filesSearched++
+      if (r.status === 'fulfilled' && r.value.matches.length > 0) {
+        allMatches.push(...r.value.matches)
       }
     }
   }
 
-  // Format output
   return formatGrepOutput(outputMode, allMatches, headLimit, offset, showLineNums)
 }
 
@@ -654,7 +646,6 @@ function formatGrepOutput(
   const notices: string[] = []
 
   if (outputMode === 'content') {
-    // Apply offset and head_limit per-match
     const effective = offset > 0 ? allMatches.slice(offset) : allMatches
     const limited = headLimit > 0 && effective.length > headLimit
       ? effective.slice(0, headLimit)
@@ -680,7 +671,6 @@ function formatGrepOutput(
     filenames = [...fileSet]
     truncated = headLimit > 0 && allMatches.length > offset + headLimit
   } else if (outputMode === 'files_with_matches') {
-    // Deduplicate file paths
     const uniqueFiles = [...new Set(allMatches.map((m) => m.filePath))]
     uniqueFiles.sort()
 
@@ -695,7 +685,7 @@ function formatGrepOutput(
     filenames = limitedFiles
     truncated = headLimit > 0 && uniqueFiles.length > offset + headLimit
   } else {
-    // count mode — aggregate per file
+    // Count mode — aggregate per file
     const countMap = new Map<string, number>()
     let total = 0
     for (const m of allMatches) {
@@ -721,15 +711,14 @@ function formatGrepOutput(
 
   let output = outputLines.join('\n')
 
-  // Build truncation notices
   if (truncated) notices.push(`${headLimit} results limit reached`)
   if (linesTruncated) notices.push(`Some lines truncated to ${MAX_LINE_LENGTH} chars`)
 
-  // Byte truncation
   const maxChars = outputMode === 'files_with_matches' ? MAX_GLOB_RESULT_CHARS : MAX_RESULT_SIZE_CHARS
   if (output.length > maxChars) {
     output = output.slice(0, maxChars)
     notices.push(`${maxChars / 1000}KB output limit reached`)
+    truncated = true
   }
 
   if (notices.length > 0) {
@@ -747,6 +736,6 @@ function formatGrepOutput(
     numLines: outputMode === 'content' ? outputLines.length : undefined,
     appliedLimit,
     appliedOffset,
-    truncated: truncated || linesTruncated || output.length > MAX_RESULT_SIZE_CHARS,
+    truncated: truncated || linesTruncated,
   }
 }
