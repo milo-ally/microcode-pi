@@ -24,7 +24,10 @@ const CLEARED_MESSAGE = '[Old tool result content cleared]'
 
 // Tool names whose results are eligible for microcompact (must match registered names in tools/*/index.ts)
 const COMPACTABLE_TOOL_NAMES = new Set([
-  BASH_TOOL_NAME, READ_TOOL_NAME, WRITE_TOOL_NAME, EDIT_TOOL_NAME,
+  BASH_TOOL_NAME, 
+  READ_TOOL_NAME, 
+  WRITE_TOOL_NAME, 
+  EDIT_TOOL_NAME,
 ])
 
 // Keep the last N tool results of each type
