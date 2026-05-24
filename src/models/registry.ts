@@ -1,7 +1,7 @@
 /**
  * Model registry — static model definitions matching pi-ai's models.generated.ts.
  *
- * Only 4 models are exposed: deepseek-v4-pro, deepseek-v4-flash, mimo-v2.5, mimo-v2.5-pro.
+ * 7 models exposed: deepseek-v4-pro/flash, mimo-v2.5/pro, gemini-2.5-pro/flash/flash-lite.
  * Providers switch automatically with model selection.
  * Environment variables override baseUrl and provide API keys.
  */
@@ -70,6 +70,43 @@ const MODELS: Model<Api>[] = [
     cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
     contextWindow: 1048576,
     maxTokens: 128000,
+  },
+  // --- google provider (Gemini, via google-generative-ai protocol) ---
+  {
+    id: 'gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
+    api: 'google-generative-ai',
+    provider: 'google',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  },
+  {
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
+    api: 'google-generative-ai',
+    provider: 'google',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  },
+  {
+    id: 'gemini-2.5-flash-lite',
+    name: 'Gemini 2.5 Flash Lite',
+    api: 'google-generative-ai',
+    provider: 'google',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
   }
 ] as Model<Api>[]
 
@@ -79,7 +116,6 @@ const DEFAULT_MODEL_ID = MODELS[0].id
 // Env var names for provider configuration
 const ENV_KEYS = {
   apiKey: ['API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
-  baseUrl: ['BASE_URL', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL'],
   model: ['MODEL', 'OPENAI_MODEL', 'ANTHROPIC_MODEL'],
 } as const
 
@@ -96,13 +132,30 @@ function findEnvValue(keys: readonly string[]): string | undefined {
 }
 
 /**
- * Apply environment variable overrides to a model.
- * - BASE_URL / OPENAI_BASE_URL / ANTHROPIC_BASE_URL → override baseUrl
+ * Apply environment variable overrides to a model's baseUrl.
+ * - BASE_URL: global override, applies to all models
+ * - OPENAI_BASE_URL: only for openai-completions models
+ * - ANTHROPIC_BASE_URL: only for anthropic-messages models
+ *
+ * This prevents e.g. OPENAI_BASE_URL (an OpenAI-compatible proxy) from
+ * breaking Gemini or Anthropic native API endpoints.
  */
 function applyEnvOverrides(model: Model<Api>): Model<Api> {
-  const baseUrl = findEnvValue(ENV_KEYS.baseUrl)
-  if (!baseUrl) return model
-  return { ...model, baseUrl }
+  // Global override — applies unconditionally
+  const globalBase = getEnv('BASE_URL')
+  if (globalBase) return { ...model, baseUrl: globalBase }
+
+  // Protocol-specific overrides
+  if (model.api === 'openai-completions') {
+    const openaiBase = getEnv('OPENAI_BASE_URL')
+    if (openaiBase) return { ...model, baseUrl: openaiBase }
+  }
+  if (model.api === 'anthropic-messages') {
+    const anthropicBase = getEnv('ANTHROPIC_BASE_URL')
+    if (anthropicBase) return { ...model, baseUrl: anthropicBase }
+  }
+
+  return model
 }
 
 // ============================================================================
@@ -182,6 +235,12 @@ export function resolveApiKey(model: Model<Api>): string | undefined {
   // Provider-specific keys
   const providerKey = getEnv(`${model.provider.toUpperCase().replace(/-/g, '_')}_API_KEY`)
   if (providerKey) return providerKey
+
+  // Gemini API key convention (provider=google → GEMINI_API_KEY)
+  if (model.provider === 'google') {
+    const geminiKey = getEnv('GEMINI_API_KEY')
+    if (geminiKey) return geminiKey
+  }
 
   // Common keys
   return findEnvValue(ENV_KEYS.apiKey)

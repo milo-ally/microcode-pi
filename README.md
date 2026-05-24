@@ -47,9 +47,25 @@ Set one of the following environment variables:
 
 | Provider   | Key                  | Base URL env             | Model env         |
 |------------|----------------------|--------------------------|-------------------|
+| DeepSeek   | `DEEPSEEK_API_KEY`   | —                        | —                 |
+| MiMo       | `XIAOMIMIMO_API_KEY` | —                        | —                 |
+| Google     | `GEMINI_API_KEY`     | —                        | —                 |
 | Anthropic  | `ANTHROPIC_API_KEY`  | `ANTHROPIC_BASE_URL`     | `ANTHROPIC_MODEL` |
-| OpenAI     | `OPENAI_API_KEY`     | `OPENAI_BASE_URL`        | `OPENAI_MODEL`    |
+| OpenAI     | `OPENAI_API_KEY`     | `OPENAI_BASE_URL`        | `MODEL`           |
 | Custom     | `API_KEY`            | `BASE_URL`               | `MODEL`           |
+
+### Model Selection
+
+Set the `MODEL` environment variable to a model ID. For example, to use Gemini:
+
+```bash
+export GEMINI_API_KEY=your-key
+MODEL=gemini-2.5-pro microcode
+```
+
+Built-in models: `deepseek-v4-pro`, `deepseek-v4-flash`, `mimo-v2.5`, `mimo-v2.5-pro`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`.
+
+You can also switch models at runtime with the `/model` slash command.
 
 ### MCP Servers
 

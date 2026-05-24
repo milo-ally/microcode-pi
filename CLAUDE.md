@@ -174,7 +174,7 @@ Model output → AssistantMessage
 
 ### Model Registry (`models/registry.ts`)
 
-microcode-pi maintains its own static model list (4 models):
+microcode-pi maintains its own static model list (7 models):
 
 | Model ID | Provider | API | Reasoning | Context Window |
 |---|---|---|---|---|
@@ -182,23 +182,40 @@ microcode-pi maintains its own static model list (4 models):
 | `deepseek-v4-flash` | deepseek | openai-completions | true | 1M |
 | `mimo-v2.5` | xiaomimimo | openai-completions | true | 1M |
 | `mimo-v2.5-pro` | xiaomimimo | openai-completions | true | 1M |
+| `gemini-2.5-pro` | google | google-generative-ai | true | 1M |
+| `gemini-2.5-flash` | google | google-generative-ai | true | 1M |
+| `gemini-2.5-flash-lite` | google | google-generative-ai | true | 1M |
 
-All models use the `openai-completions` protocol and set:
+DeepSeek and MiMo models use the `openai-completions` protocol and set:
 ```typescript
 compat: { requiresReasoningContentOnAssistantMessages: true, thinkingFormat: 'deepseek' }
 ```
+
+Gemini models use the `google-generative-ai` protocol (no `compat` needed — pi-ai's google provider handles thinking natively via Gemini's `thought: true` part format).
+
+### Adding a New Model
+
+To add a new model to microcode-pi:
+
+1. Find the model definition in `pi/packages/ai/src/models.generated.ts` (search by model ID)
+2. Copy the definition into the `MODELS` array in `src/models/registry.ts`, removing the `satisfies Model<...>` type assertion (the array's `as Model<Api>[]` cast covers it)
+3. If the provider is not `deepseek`/`openai`/`anthropic`, ensure `resolveApiKey()` covers its API key env var — check `pi/packages/ai/src/env-api-keys.ts` for the canonical env var name (e.g. `google` → `GEMINI_API_KEY`)
+4. Test: set the env var, run with `MODEL=<model-id>`, verify a basic prompt completes
 
 ### Environment Variable Resolution Chain
 
 ```typescript
 // API Key resolution order
 resolveApiKey(model):
-  1. ${PROVIDER}_API_KEY     // e.g. DEEPSEEK_API_KEY
-  2. API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY
+  1. ${PROVIDER}_API_KEY     // e.g. DEEPSEEK_API_KEY, GOOGLE_API_KEY
+  2. GEMINI_API_KEY          // (google provider only, pi-ai convention)
+  3. API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY
 
-// Base URL override
+// Base URL override (protocol-aware)
 applyEnvOverrides(model):
-  BASE_URL / OPENAI_BASE_URL / ANTHROPIC_BASE_URL → overrides model.baseUrl
+  BASE_URL              → overrides all models (global)
+  OPENAI_BASE_URL       → only for openai-completions models
+  ANTHROPIC_BASE_URL    → only for anthropic-messages models
 
 // Model selection
 getCurrentModel():
