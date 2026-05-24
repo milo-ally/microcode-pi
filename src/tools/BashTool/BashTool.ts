@@ -6,8 +6,10 @@ import type { PermissionBehavior } from '../../permissions/types.ts'
 
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask'
 
+const shellConfig = getShellConfig()
+
 const bashSchema = Type.Object({
-  command: Type.String({ description: 'Bash command to execute' }),
+  command: Type.String({ description: `${shellConfig.name} command to execute` }),
   timeout: Type.Optional(
     Type.Number({ description: 'Timeout in seconds (optional, no default timeout)' }),
   ),
@@ -27,18 +29,21 @@ export interface BashToolDetails {
   exitCode: number | null
 }
 
-function getShellConfig(): { shell: string; args: string[] } {
+function getShellConfig(): { shell: string; args: string[]; name: string } {
   if (process.platform === 'win32') {
-    return { shell: 'cmd.exe', args: ['/c'] }
+    if (process.env.PSModulePath || process.env.SHELL?.includes('powershell')) {
+      return { shell: 'powershell.exe', args: ['-NoProfile', '-Command'], name: 'PowerShell' }
+    }
+    return { shell: 'cmd.exe', args: ['/c'], name: 'cmd.exe' }
   }
-  return { shell: '/bin/bash', args: ['-c'] }
+  return { shell: '/bin/bash', args: ['-c'], name: 'Bash' }
 }
 
 export function createBashTool(cwd: string): AgentTool<typeof bashSchema, BashToolDetails> {
   return {
     name: 'bash',
-    label: 'Bash',
-    description: 'Execute a bash command and return its output.',
+    label: shellConfig.name,
+    description: `Execute a shell command in ${shellConfig.name} and return its output.`,
     parameters: bashSchema,
     async execute(
       _toolCallId: string,

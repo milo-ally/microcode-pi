@@ -35,6 +35,10 @@ function getUnameSR(): string {
 }
 
 function getShellInfoLine(): string {
+  if (process.platform === 'win32') {
+    const shell = process.env.PSModulePath ? 'PowerShell' : 'cmd.exe'
+    return `Shell: ${shell}`
+  }
   const shell = process.env.SHELL ?? '/bin/sh'
   return `Shell: ${shell}`
 }

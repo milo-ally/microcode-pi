@@ -199,27 +199,40 @@ To add a new model to microcode-pi:
 
 1. Find the model definition in `pi/packages/ai/src/models.generated.ts` (search by model ID)
 2. Copy the definition into the `MODELS` array in `src/models/registry.ts`, removing the `satisfies Model<...>` type assertion (the array's `as Model<Api>[]` cast covers it)
-3. If the provider is not `deepseek`/`openai`/`anthropic`, ensure `resolveApiKey()` covers its API key env var — check `pi/packages/ai/src/env-api-keys.ts` for the canonical env var name (e.g. `google` → `GEMINI_API_KEY`)
+3. Set the protocol-appropriate env var (e.g. `OPENAI_API_KEY` for openai-completions models)
 4. Test: set the env var, run with `MODEL=<model-id>`, verify a basic prompt completes
 
 ### Environment Variable Resolution Chain
 
+API key and base URL are resolved by **protocol** (not provider):
+
+```
+| 协议                 | API Key            | Base URL           | Model           |
+|---------------------|--------------------|--------------------|-----------------|
+| openai-completions  | OPENAI_API_KEY     | OPENAI_BASE_URL    | OPENAI_MODEL    |
+| anthropic-messages  | ANTHROPIC_API_KEY  | ANTHROPIC_BASE_URL | ANTHROPIC_MODEL |
+| google-generative-ai| GEMINI_API_KEY     | GEMINI_BASE_URL    | GEMINI_MODEL    |
+| 任意（兜底）         | API_KEY            | BASE_URL           | —               |
+```
+
 ```typescript
-// API Key resolution order
+// API Key — resolved by model.api
 resolveApiKey(model):
-  1. ${PROVIDER}_API_KEY     // e.g. DEEPSEEK_API_KEY, GOOGLE_API_KEY
-  2. GEMINI_API_KEY          // (google provider only, pi-ai convention)
-  3. API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY
+  openai-completions  → OPENAI_API_KEY
+  anthropic-messages  → ANTHROPIC_API_KEY
+  google-generative-ai→ GEMINI_API_KEY
+  fallback            → API_KEY
 
 // Base URL override (protocol-aware)
 applyEnvOverrides(model):
   BASE_URL              → overrides all models (global)
   OPENAI_BASE_URL       → only for openai-completions models
   ANTHROPIC_BASE_URL    → only for anthropic-messages models
+  GEMINI_BASE_URL       → only for google-generative-ai models
 
 // Model selection
 getCurrentModel():
-  MODEL / OPENAI_MODEL / ANTHROPIC_MODEL → exact match → partial match → default deepseek-v4-pro
+  OPENAI_MODEL / ANTHROPIC_MODEL / GEMINI_MODEL / MODEL → exact match → partial match → default deepseek-v4-pro
 ```
 
 ### streamFn Integration (`agent.ts:108-114`)

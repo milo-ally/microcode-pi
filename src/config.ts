@@ -31,15 +31,17 @@ export function resolveConfig(): ResolvedConfig {
 export function getApiKeyForProvider(provider: string): string | undefined {
   const { model, apiKey } = getModelConfig()
   if (provider === model.provider) return apiKey
-  return process.env.API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY
+  return process.env.API_KEY
 }
 
 /**
  * Find a model by ID from the registry and resolve its config.
  * Used by --model CLI flag and /model command.
+ *
+ * @param api - If provided, disambiguate between protocols for the same model ID.
  */
-export function createModelForId(modelId: string): ResolvedConfig {
-  const { model, apiKey } = getModelConfig(modelId)
+export function createModelForId(modelId: string, api?: Api): ResolvedConfig {
+  const { model, apiKey } = getModelConfig(modelId, api)
   setCurrentModel(model)
   return { model, apiKey, provider: model.provider }
 }

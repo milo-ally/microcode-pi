@@ -1,6 +1,6 @@
 import type { Agent, AgentEvent, AgentMessage, ThinkingLevel } from '@earendil-works/pi-agent-core'
 import { generateSummary, DEFAULT_COMPACTION_SETTINGS } from '@earendil-works/pi-agent-core'
-import type { AssistantMessage } from '@earendil-works/pi-ai'
+import type { Api, AssistantMessage } from '@earendil-works/pi-ai'
 import {
   TUI,
   ProcessTerminal,
@@ -544,12 +544,24 @@ export class App {
     // Show selectable model list
     const models = getAllModels()
     const currentId = this.config.model.id
+    const currentApi = this.config.model.api
 
-    const items: SelectItem[] = models.map((m) => ({
-      value: m.id,
-      label: m.name ?? m.id,
-      description: `provider: ${m.provider}${m.id === currentId ? ' (current)' : ''}`,
-    }))
+    // Detect duplicate IDs to show protocol info
+    const idCounts = new Map<string, number>()
+    for (const m of models) {
+      idCounts.set(m.id, (idCounts.get(m.id) ?? 0) + 1)
+    }
+
+    const items: SelectItem[] = models.map((m) => {
+      const hasDuplicate = (idCounts.get(m.id) ?? 0) > 1
+      const protocolLabel = hasDuplicate ? ` [${m.api}]` : ''
+      const isCurrent = m.id === currentId && m.api === currentApi
+      return {
+        value: `${m.id}|${m.api}`,
+        label: `${m.name ?? m.id}${protocolLabel}`,
+        description: `${m.provider}${isCurrent ? ' (current)' : ''}`,
+      }
+    })
 
     const selectList = new SelectList(items, items.length, {
       selectedPrefix: (text) => chalk.cyan(text),
@@ -557,7 +569,7 @@ export class App {
       description: (text) => theme.dim(text),
       scrollInfo: (text) => theme.dim(text),
       noMatch: (text) => theme.dim(text),
-    })
+    }, { maxPrimaryColumnWidth: 52 })
 
     const label = theme.fg('accent', 'Select model:')
     this.chatContainer.addChild(new Text(label, 1, 0))
@@ -580,14 +592,15 @@ export class App {
       return undefined
     })
 
-    const finish = (selectedModelId?: string) => {
+    const finish = (selectedValue?: string) => {
       if (finished) return
       finished = true
       removeListener()
       this.chatContainer.removeChild(selectList)
 
-      if (selectedModelId) {
-        this.switchModel(selectedModelId)
+      if (selectedValue) {
+        const [modelId, api] = selectedValue.split('|')
+        this.switchModel(modelId, api as Api | undefined)
       }
 
       this.chatContainer.addChild(new Spacer(1))
@@ -605,9 +618,9 @@ export class App {
   }
 
   /** Switch to a model by ID and update all dependent state. */
-  private switchModel(modelId: string): void {
+  private switchModel(modelId: string, api?: Api): void {
     try {
-      const { model, apiKey, provider } = createModelForId(modelId)
+      const { model, apiKey, provider } = createModelForId(modelId, api)
 
       this.agent.state.model = model
       this.config = { model, apiKey, provider }
@@ -625,7 +638,7 @@ export class App {
       // Rebuild footer with new model info
       this.rebuildFooter()
 
-      this.showStatus(`Model switched to: ${model.id} (${provider})`)
+      this.showStatus(`Model switched to: ${model.id} (${provider}, ${model.api})`)
     } catch (error) {
       this.showError(error instanceof Error ? error.message : String(error))
     }

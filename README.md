@@ -43,24 +43,26 @@ microcode --help
 
 ### API Keys
 
-Set one of the following environment variables:
+Set one or more protocol-specific keys. The model's protocol determines which key is used.
 
-| Provider   | Key                  | Base URL env             | Model env         |
-|------------|----------------------|--------------------------|-------------------|
-| DeepSeek   | `DEEPSEEK_API_KEY`   | —                        | —                 |
-| MiMo       | `XIAOMIMIMO_API_KEY` | —                        | —                 |
-| Google     | `GEMINI_API_KEY`     | —                        | —                 |
-| Anthropic  | `ANTHROPIC_API_KEY`  | `ANTHROPIC_BASE_URL`     | `ANTHROPIC_MODEL` |
-| OpenAI     | `OPENAI_API_KEY`     | `OPENAI_BASE_URL`        | `MODEL`           |
-| Custom     | `API_KEY`            | `BASE_URL`               | `MODEL`           |
+| 协议                 | API Key            | Base URL           | Model           |
+|---------------------|--------------------|--------------------|-----------------|
+| openai-completions  | `OPENAI_API_KEY`   | `OPENAI_BASE_URL`  | `OPENAI_MODEL`  |
+| anthropic-messages  | `ANTHROPIC_API_KEY`| `ANTHROPIC_BASE_URL`| `ANTHROPIC_MODEL`|
+| google-generative-ai| `GEMINI_API_KEY`   | `GEMINI_BASE_URL`  | `GEMINI_MODEL`  |
+| 任意（兜底）         | `API_KEY`          | `BASE_URL`         | `MODEL`         |
+
+DeepSeek and MiMo use the OpenAI protocol. Gemini models use the Gemini protocol.
+Multiple protocols can be configured simultaneously.
 
 ### Model Selection
 
-Set the `MODEL` environment variable to a model ID. For example, to use Gemini:
+Set the model env var for the corresponding protocol. For example, to use Gemini:
 
 ```bash
+export GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 export GEMINI_API_KEY=your-key
-export MODEL=gemini-2.5-pro 
+export GEMINI_MODEL=your-gemini-model
 microcode
 ```
 
