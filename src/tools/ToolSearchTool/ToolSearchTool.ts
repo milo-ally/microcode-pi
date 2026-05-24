@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import { Type } from 'typebox'
 import type { ToolDefinition } from '../registry.ts'
 
-export const TOOL_SEARCH_TOOL_NAME = 'tool_search'
+export const TOOL_SEARCH_TOOL_NAME = 'search'
 
 export interface ToolSearchToolOptions {
   /** Get the list of all deferred tool definitions. */

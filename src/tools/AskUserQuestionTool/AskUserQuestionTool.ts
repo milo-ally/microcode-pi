@@ -8,7 +8,7 @@ import type { PermissionBehavior } from '../../permissions/types.ts'
 // receive no answers and the tool would be useless.
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'ask' // ★ Elegant: this tool's permission check IS its functionality.
 
-export const ASK_USER_QUESTION_TOOL_NAME = 'ask_user_question'
+export const ASK_USER_QUESTION_TOOL_NAME = 'Ask'
 
 // ============================================================================
 // Schema

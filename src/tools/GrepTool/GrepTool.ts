@@ -3,7 +3,7 @@ import { type Static, Type } from 'typebox'
 import type { PermissionBehavior } from '../../permissions/types.ts'
 import { grepSearch } from '../../utils/searchUtils.ts'
 
-export const TOOL_NAME = 'Grep'
+export const TOOL_NAME = 'grep'
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'allow'
 
 const grepSchema = Type.Object({

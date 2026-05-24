@@ -3,7 +3,7 @@ import { type Static, Type } from 'typebox'
 import type { PermissionBehavior } from '../../permissions/types.ts'
 import { globSearch } from '../../utils/searchUtils.ts'
 
-export const TOOL_NAME = 'Glob'
+export const TOOL_NAME = 'glob'
 export const TOOL_DEFAULT_PERMISSION: PermissionBehavior = 'allow'
 
 const DEFAULT_LIMIT = 1000
