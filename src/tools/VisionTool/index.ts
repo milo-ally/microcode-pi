@@ -1,0 +1,22 @@
+import { registerTool } from '../registry.ts'
+import { createVisionTool, TOOL_NAME, TOOL_DEFAULT_PERMISSION } from './VisionTool.ts'
+import { VisionToolUI } from './UI.tsx'
+
+registerTool({
+  name: TOOL_NAME,
+  defaultPermission: TOOL_DEFAULT_PERMISSION,
+  createTool: (cwd: string) => createVisionTool(cwd),
+  description:
+    'Load an image from a URL or local file path into the conversation. Use for fetching images the user references by URL or disk path. Do NOT use for [Image: ...] placeholders — those images are already attached and visible.',
+  ui: VisionToolUI,
+  formatDescription: (input) => {
+    const src =
+      typeof input.image_source === 'string' ? input.image_source : '(unknown source)'
+    const prompt =
+      typeof input.prompt === 'string' ? ` "${input.prompt.slice(0, 40)}"` : ''
+    return `vision ${src}${prompt}`
+  },
+  extractMatchContent: (input) =>
+    typeof input.image_source === 'string' ? input.image_source : undefined,
+  shouldDefer: false,
+})

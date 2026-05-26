@@ -7,6 +7,7 @@ import {
   type AgentMessage,
 } from '@earendil-works/pi-agent-core'
 import { NodeFileSystem } from './NodeFileSystem.ts'
+import { replaceImageBlocksForPersistence } from './imageSerializer.ts'
 
 const SESSIONS_DIR = path.join(os.homedir(), '.microcode', 'sessions')
 
@@ -71,9 +72,10 @@ export class SessionManager {
   async saveMessages(messages: AgentMessage[]): Promise<void> {
     if (!this.session) return
 
-    // Append only new messages
+    // Append only new messages, with image blocks replaced by text references
     for (let i = this.savedMessageCount; i < messages.length; i++) {
-      await this.session.appendMessage(messages[i])
+      const serialized = replaceImageBlocksForPersistence(messages[i])
+      await this.session.appendMessage(serialized)
     }
     this.savedMessageCount = messages.length
   }

@@ -43,6 +43,7 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
   const coreTools = createCodingTools({
     cwd,
     getSkills: () => skillsResult.skills,
+    modelSupportsImages: modelConfig.model.input.includes('image'),
   })
 
   // Create ToolSearchTool with callbacks
@@ -166,6 +167,34 @@ export function createMicrocodeAgent(options: CreateMicrocodeAgentOptions = {}) 
 /**
  * Get the CompactionManager attached to an agent.
  */
+/**
+ * Rebuild the agent's core tools after a model switch.
+ * Preserves ToolSearchTool, MCP tools, and MCP resource tools that were
+ * already discovered/injected.
+ */
+export function rebuildCoreTools(agent: Agent, cwd: string): void {
+  const skills = getSkills(agent)
+  const modelSupportsImages = agent.state.model.input.includes('image')
+
+  const coreTools = createCodingTools({
+    cwd,
+    getSkills: () => skills,
+    modelSupportsImages,
+  })
+
+  // Preserve non-core tools: ToolSearchTool, MCP tools, MCP resource tools
+  const nonCoreTools = agent.state.tools.filter(
+    (t: any) =>
+      t.name === TOOL_SEARCH_TOOL_NAME ||
+      t.name.startsWith('mcp__') ||
+      t.name === 'list_mcp_resources' ||
+      t.name === 'read_mcp_resource',
+  )
+
+  agent.state.tools.length = 0
+  agent.state.tools.push(...coreTools, ...nonCoreTools)
+}
+
 export function getCompactionManager(agent: Agent): CompactionManager | undefined {
   return (agent as any).__compactionManager
 }

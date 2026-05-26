@@ -13,6 +13,7 @@ import './ToolSearchTool/index.ts'
 import './AskUserQuestionTool/index.ts'
 import './GrepTool/index.ts'
 import './GlobTool/index.ts'
+import './VisionTool/index.ts'
 
 // Re-exports for backward compatibility
 export { createBashTool, TOOL_DEFAULT_PERMISSION as BASH_DEFAULT_PERMISSION } from './BashTool/BashTool.ts'
@@ -28,6 +29,7 @@ export type { ToolSearchToolOptions } from './ToolSearchTool/ToolSearchTool.ts'
 export { createAskUserQuestionTool, ASK_USER_QUESTION_TOOL_NAME } from './AskUserQuestionTool/AskUserQuestionTool.ts'
 export { createGrepTool, TOOL_NAME as GREP_TOOL_NAME, TOOL_DEFAULT_PERMISSION as GREP_DEFAULT_PERMISSION } from './GrepTool/GrepTool.ts'
 export { createGlobTool, TOOL_NAME as GLOB_TOOL_NAME, TOOL_DEFAULT_PERMISSION as GLOB_DEFAULT_PERMISSION } from './GlobTool/GlobTool.ts'
+export { createVisionTool, TOOL_NAME as VISION_TOOL_NAME, TOOL_DEFAULT_PERMISSION as VISION_DEFAULT_PERMISSION } from './VisionTool/VisionTool.ts'
 
 /** Get the names of all deferred tool definitions (for system prompt listing). */
 export function getDeferredToolNames(): string[] {
@@ -49,10 +51,12 @@ export interface CreateCodingToolsOptions {
   getSkills?: () => any[]
   /** If true, include deferred tools in the output. Default: false. */
   includeDeferred?: boolean
+  /** If false, the vision tool is excluded. Default: true. */
+  modelSupportsImages?: boolean
 }
 
 export function createCodingTools(options: CreateCodingToolsOptions): AgentTool<any, any>[] {
-  const { cwd, getSkills, includeDeferred = false } = options
+  const { cwd, getSkills, includeDeferred = false, modelSupportsImages = true } = options
 
   const tools: AgentTool<any, any>[] = []
 
@@ -62,6 +66,8 @@ export function createCodingTools(options: CreateCodingToolsOptions): AgentTool<
     if (def.name === 'skill') continue
     // Skip ToolSearchTool placeholder — it's created separately in agent.ts
     if (def.name === TOOL_SEARCH_TOOL_NAME) continue
+    // Skip vision tool if model doesn't support images
+    if (def.name === 'vision' && !modelSupportsImages) continue
     tools.push(def.createTool(cwd))
   }
 

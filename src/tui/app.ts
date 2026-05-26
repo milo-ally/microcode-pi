@@ -26,6 +26,18 @@ import { ToolExecutionComponent } from './components/toolExecution.ts'
 import { BashExecutionComponent } from './components/bashExecution.ts'
 import { getToolUIConstructor, type ToolUIComponent } from '../tools/registry.ts'
 import { UserMessage } from './components/userMessage.ts'
+import type { ImageContent } from '@earendil-works/pi-ai'
+import { modelSupportsImages } from '../models/index.ts'
+import {
+  collectImagePathsFromText,
+  stripImagePathsFromText,
+  tryReadImageFromPath,
+  storeImage,
+  unquotePath,
+  IMAGE_EXTENSION_REGEX,
+  type CachedImage,
+} from '../utils/imageUtils.ts'
+import { existsSync } from 'fs'
 import type { McpClientManager } from '../mcp/client.ts'
 import type { McpServerState, McpServerConfig } from '../mcp/types.ts'
 import { TOOL_NAME as BASH_TOOL_NAME } from '../tools/BashTool/BashTool.ts'
@@ -34,7 +46,7 @@ import { TOOL_NAME as WRITE_TOOL_NAME } from '../tools/FileWriteTool/FileWriteTo
 import { TOOL_NAME as EDIT_TOOL_NAME } from '../tools/FileEditTool/FileEditTool.ts'
 import { addMcpServer, removeMcpServer, type ConfigScope } from '../mcp/configWrite.ts'
 import { SessionManager } from '../session/SessionManager.ts'
-import { getCompactionManager, getSkills, getSkillDiagnostics } from '../agent.ts'
+import { getCompactionManager, getSkills, getSkillDiagnostics, rebuildCoreTools } from '../agent.ts'
 import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool, registerMcpToolsAsDeferred, getDeferredToolNames } from '../tools/index.ts'
 import { PermissionManager, type PermissionMode, PERMISSION_MODES } from '../permissions/index.ts'
 
@@ -82,6 +94,9 @@ export class App {
   private isBashMode = false
   private bashComponent?: BashExecutionComponent
   private startupWarnings: string[] = []
+  private pendingImages: CachedImage[] = []
+  private imagePathProcessing = false
+  private suppressTrailingQuote = false
   onExit?: () => void | Promise<void>
 
   constructor(agent: Agent, mcpClient?: McpClientManager, sessionManager?: SessionManager, permissionManager?: PermissionManager, modelId?: string, thinkingLevel?: ThinkingLevel) {
@@ -134,13 +149,13 @@ export class App {
 
     // Main interactive loop
     while (true) {
-      const userInput = await this.getUserInput()
-      if (!userInput.trim()) continue
+      const rawInput = await this.getUserInput()
+      if (!rawInput.trim()) continue
 
       // Handle bash commands (! for normal, !! for excluded from context)
-      if (userInput.startsWith('!')) {
-        const isExcluded = userInput.startsWith('!!')
-        const command = isExcluded ? userInput.slice(2).trim() : userInput.slice(1).trim()
+      if (rawInput.startsWith('!')) {
+        const isExcluded = rawInput.startsWith('!!')
+        const command = isExcluded ? rawInput.slice(2).trim() : rawInput.slice(1).trim()
         if (command) {
           await this.handleBashCommand(command, isExcluded)
           this.isBashMode = false
@@ -149,18 +164,53 @@ export class App {
       }
 
       // Handle slash commands locally
-      if (userInput.startsWith('/')) {
-        const handled = this.handleSlashCommand(userInput.trim())
+      if (rawInput.startsWith('/')) {
+        const handled = this.handleSlashCommand(rawInput.trim())
         if (handled) continue
       }
 
+      // --- Image processing at submit time ---
+      // If pendingImages were already populated by onChange, skip re-scanning.
+      const imagePaths = this.pendingImages.length === 0
+        ? collectImagePathsFromText(rawInput)
+        : []
+      const userInput = stripImagePathsFromText(rawInput)
+
+      if (imagePaths.length > 0) {
+        if (modelSupportsImages(this.agent.state.model)) {
+          for (const filePath of imagePaths) {
+            const image = tryReadImageFromPath(filePath)
+            if (image) {
+              const sessionId = this.sessionManager.getSessionId() ?? 'unknown'
+              const { cachePath, fileName } = storeImage(image.data, image.mimeType, sessionId)
+              this.pendingImages.push({ cachePath, fileName, mimeType: image.mimeType, base64Data: image.data })
+            }
+          }
+        } else {
+          this.showStatus(
+            chalk.hex('#ffff00')(
+              'Warning: Current model does not support image input. Switch to a vision-capable model (e.g. Gemini, MiMo v2.5).',
+            ),
+          )
+        }
+      }
+
+      // Skip if nothing to send (no text and no images)
+      const images = this.getPendingImageContents()
+      if (!userInput.trim() && images.length === 0) continue
+
       // Add user message to chat (with grey background)
-      this.chatContainer.addChild(new UserMessage(userInput))
+      this.chatContainer.addChild(new UserMessage(userInput, images.length > 0 ? images : undefined))
       this.chatContainer.addChild(new Spacer(1))
       this.ui.requestRender()
 
       try {
-        await this.agent.prompt(userInput)
+        if (images.length > 0) {
+          await this.agent.prompt(userInput, images)
+        } else {
+          await this.agent.prompt(userInput)
+        }
+        this.clearPendingImages()
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
         this.chatContainer.addChild(
@@ -208,6 +258,62 @@ export class App {
       this.isBashMode = text.trimStart().startsWith('!')
       if (wasBashMode !== this.isBashMode) {
         this.updateEditorBorderColor()
+      }
+
+      if (this.imagePathProcessing) return
+
+      // Suppress trailing quote left behind after an image path was stripped.
+      // Terminal drag-drop sends characters one by one. When a path is quoted
+      // (e.g. '/path/file.jpg'), the regex may match before the closing quote
+      // arrives. After we replace the path with a placeholder, the closing quote
+      // arrives as a separate event — strip it from the end of the text.
+      if (this.suppressTrailingQuote) {
+        this.suppressTrailingQuote = false
+        if (text.endsWith("'") || text.endsWith('"')) {
+          this.editor.setText(text.slice(0, -1))
+          return
+        }
+      }
+
+      // Scan for image file paths.
+      // Quoted paths (with spaces) require both quotes to match, so the closing
+      // quote has already arrived and processing is safe.
+      // Unquoted paths match immediately; the trailing quote (if any) will be
+      // handled by suppressTrailingQuote above on the next onChange.
+      const imagePaths = collectImagePathsFromText(text)
+      if (imagePaths.length > 0) {
+        this.imagePathProcessing = true
+
+        const newImages: CachedImage[] = []
+        if (modelSupportsImages(this.agent.state.model)) {
+          for (const filePath of imagePaths) {
+            const image = tryReadImageFromPath(filePath)
+            if (image) {
+              const sessionId = this.sessionManager.getSessionId() ?? 'unknown'
+              const { cachePath, fileName } = storeImage(image.data, image.mimeType, sessionId)
+              newImages.push({ cachePath, fileName, mimeType: image.mimeType, base64Data: image.data })
+            }
+          }
+        } else {
+          this.showStatus(
+            chalk.hex('#ffff00')(
+              'Warning: Current model does not support image input. Switch to a vision-capable model.',
+            ),
+          )
+        }
+
+        this.pendingImages = newImages
+
+        let clean = stripImagePathsFromText(text)
+        if (newImages.length > 0) {
+          const markers = newImages.map(img => `[Image: ${img.fileName}]`).join(' ')
+          clean = clean ? `${clean} ${markers}` : markers
+        }
+        // setText triggers onChange synchronously; imagePathProcessing guard
+        // prevents the suppressTrailingQuote check from firing prematurely.
+        this.editor.setText(clean)
+        this.suppressTrailingQuote = true
+        this.imagePathProcessing = false
       }
     }
 
@@ -628,6 +734,13 @@ export class App {
 
       this.agent.state.model = model
       this.config = { model, apiKey, provider }
+
+      // Clear image state on model switch
+      this.clearPendingImages()
+      this.suppressTrailingQuote = false
+
+      // Rebuild tools for new model (adds/removes vision tool based on capability)
+      rebuildCoreTools(this.agent, process.cwd())
 
       // Update compaction manager with new model and API key
       const compactionManager = getCompactionManager(this.agent)
@@ -1410,6 +1523,19 @@ export class App {
     )
     this.chatContainer.addChild(new Spacer(1))
     this.ui.requestRender()
+  }
+
+  getPendingImageContents(): ImageContent[] {
+    return this.pendingImages.map((img) => ({
+      type: 'image' as const,
+      data: img.base64Data,
+      mimeType: img.mimeType,
+    }))
+  }
+
+  clearPendingImages(): void {
+    this.pendingImages = []
+    this.suppressTrailingQuote = false
   }
 
   private handleEditorSubmit(text: string): void {

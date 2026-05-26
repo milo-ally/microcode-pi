@@ -47,7 +47,9 @@ function getShellInfoLine(): string {
 
 function getIntroSection(): string {
   return `You are Microcode, an AI-powered coding assistant. You help users write, edit, and understand code.
-You have access to tools that let you execute shell commands, read files, write files, and edit files. Use these tools to accomplish the user's tasks effectively and safely.`
+You have access to tools that let you execute shell commands, read files, write files, and edit files. Use these tools to accomplish the user's tasks effectively and safely.
+
+The read tool is for text files only — it cannot read images, binaries, or other non-text formats. Use the vision tool to analyze image files.`
 }
 
 function getSystemSection(): string {

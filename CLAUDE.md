@@ -1041,3 +1041,283 @@ So mutating `ctx.toolCall.arguments` in `beforeToolCall` has **zero effect** on 
 3. **`getTool` resolver pattern** — `PermissionManager` receives a `(name) => AgentTool` callback to look up tool instances by name. This avoids coupling the permission manager to a specific tools array.
 
 4. **`getAndClearAnswers()` idempotency** — Answers are consumed on read. This prevents stale answers from leaking into subsequent calls if the tool is reused.
+
+---
+
+## VisionTool
+
+### Purpose
+
+Lets the model load images from URLs or local file paths into the conversation. The model calls `vision({ image_source, prompt })`; the tool fetches/reads the image and returns an `ImageContent` block in the tool result, attaching the image directly so the model can analyze visual content.
+
+**Critical distinction**: `[Image: uuid.ext]` placeholders in user messages mean the image is **already attached** via `agent.prompt(text, images)`. The VisionTool is NOT for these — it is for URLs and real disk paths the user mentions but hasn't dragged in.
+
+### Architecture
+
+```
+Model calls: vision({ image_source: "https://..." | "/path/to/file.png", prompt: "..." })
+    │
+    ▼
+beforeToolCall → PermissionManager.checkPermission() → default: 'allow' (auto-approved)
+    │
+    ▼
+tool.execute(toolCallId, params)
+    │
+    ├─ URL source → fetch() → arrayBuffer → Buffer → base64
+    │
+    ├─ File source → resolve against cwd → isImageFilePath() → readImageToBase64()
+    │
+    ▼
+Returns AgentToolResult with:
+  - Text block: "Image from <sourceType>: <image_source>\n\nUser prompt: <prompt>"
+  - ImageContent block: { type: 'image', data: <base64>, mimeType: 'image/...' }
+    │
+    ▼
+Agent loop → toolResult message passes through convertToLlm (pass-through)
+    │
+    ▼
+Provider transforms ImageContent to native image format (Anthropic source / Gemini inlineData / OpenAI image_url)
+    │
+    ▼
+Model processes image + prompt in its next turn
+```
+
+### Schema
+
+```typescript
+{
+  image_source: string  // URL (http/https) or absolute/relative local file path
+  prompt: string        // What the model wants to know about the image
+}
+```
+
+Supported formats: PNG, JPEG, GIF, WebP, BMP.
+
+### Permission
+
+`'allow'` — reading image files and URLs is non-destructive and read-only.
+
+### Conditional Registration
+
+VisionTool is registered with `shouldDefer: false` (core tool). It is **excluded at creation time** if the current model does not support images:
+
+```typescript
+// tools/index.ts → createCodingTools()
+if (def.name === 'vision' && !modelSupportsImages) continue
+```
+
+The `modelSupportsImages` flag comes from `agent.state.model.input.includes('image')`. On model switch (e.g. DeepSeek → Gemini), `rebuildCoreTools()` in `agent.ts` reconstructs the core tools list with the correct flag and mutates `agent.state.tools` in-place (`.length = 0` + `.push(...)`) to ensure the agent loop sees the change.
+
+**Models with image support**: Gemini 2.5 (pro/flash/flash-lite), MiMo V2.5. **Text-only**: DeepSeek V4 (pro/flash), MiMo V2.5 Pro.
+
+### Microcompact
+
+VisionTool results can be large (image blocks). `VISION_TOOL_NAME` is included in `COMPACTABLE_TOOL_NAMES` in `CompactionManager.ts`.
+
+### Files
+
+| File | Role |
+|---|---|
+| `src/tools/VisionTool/VisionTool.ts` | Tool logic: schema, URL fetch / file read, ImageContent construction |
+| `src/tools/VisionTool/index.ts` | Registration: `registerTool()` with `formatDescription`, `extractMatchContent` |
+| `src/tools/VisionTool/UI.tsx` | TUI display: shows source, mimeType, and processing status |
+| `src/utils/imageUtils.ts` | Shared image I/O used by both VisionTool and TUI paste handler |
+
+---
+
+# Image Input Support
+
+## Architecture Overview
+
+Image support spans two input paths and two persistence constraints:
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Input Paths                                          │
+│                                                       │
+│  1. User paste/drag → TUI onChange scan              │
+│     → collectImagePathsFromText()                    │
+│     → tryReadImageFromPath() → base64 in memory      │
+│     → storeImage() → ~/.microcode/image-cache/       │
+│     → [Image: uuid.ext] placeholder in editor        │
+│     → agent.prompt(text, images) on submit           │
+│                                                       │
+│  2. VisionTool → model calls vision()                │
+│     → fetch URL or read local file                   │
+│     → ImageContent block in tool result              │
+├──────────────────────────────────────────────────────┤
+│  Persistence Constraints                              │
+│                                                       │
+│  - JSONL sessions: NO base64                         │
+│    → imageSerializer replaces ImageContent blocks    │
+│      with [Image: mimeType] text references          │
+│  - Image cache: ~/.microcode/image-cache/<session>/  │
+│    → cleaned on exit via cleanupImageCache()         │
+└──────────────────────────────────────────────────────┘
+```
+
+## Key Types
+
+### ImageContent (from pi-ai)
+
+```typescript
+interface ImageContent {
+  type: 'image'
+  data: string      // base64-encoded image data (in memory only)
+  mimeType: string  // e.g. 'image/png', 'image/jpeg'
+}
+```
+
+Present in `UserMessage.content[]` and `ToolResultMessage.content[]`. Never persisted to JSONL — replaced with text references on save by `imageSerializer.replaceImageBlocksForPersistence()`.
+
+### CachedImage (local)
+
+```typescript
+interface CachedImage {
+  cachePath: string   // ~/.microcode/image-cache/<session>/<uuid>.ext
+  fileName: string    // e.g. 'abc123.png'
+  mimeType: string    // e.g. 'image/png'
+  base64Data: string  // in-memory base64 for API call
+}
+```
+
+Held in `App.pendingImages[]` between drag detection and message submission.
+
+## TUI Image Paste/Drag Flow
+
+### Character-by-character detection
+
+Terminal drag-drop sends file paths **one character at a time** via `handleInput` → `insertCharacter` → `onChange`. Bracketed paste mode (`\x1b[200~` ... `\x1b[201~`) is NOT used for drag-drop in most terminals.
+
+### Detection in onChange
+
+The `App.onChange` handler scans every text change for image paths using `collectImagePathsFromText()`. Two regex patterns:
+
+| Pattern | Matches | When |
+|---|---|---|
+| `QUOTED_PATH_RE` | `'/path/with spaces/file.png'` `"/path/with spaces/file.png"` | Terminal wraps paths with spaces/special chars in quotes |
+| `UNQUOTED_PATH_RE` | `/path/no/spaces/file.png` `'/path/no/spaces/file.png` (partial) | No-space paths; captures optional trailing quote |
+
+Both require the path to pass `existsSync()`.
+
+### Placeholder replacement
+
+When image paths are detected and the model supports images:
+1. Load images via `tryReadImageFromPath()` → base64
+2. Write to `~/.microcode/image-cache/<sessionId>/<uuid>.ext` via `storeImage()`
+3. Replace `pendingImages` with new array (not append) to avoid cross-drag accumulation
+4. Strip paths from editor text via `stripImagePathsFromText()`
+5. Insert `[Image: uuid.ext]` placeholder markers
+6. Call `editor.setText()` with the cleaned text
+
+If the model does NOT support images, a yellow warning is shown **every time** the user drags.
+
+### Trailing quote suppression
+
+For unquoted paths where the terminal wraps the path in quotes (e.g. `'/home/photo.jpg'`): the regex matches before the closing `'` arrives. After `setText()` replaces the path, the closing `'` arrives as a separate character event.
+
+Two guards prevent this from corrupting the editor:
+- **`imagePathProcessing`**: set `true` before `setText()`, `false` after. The synchronous `onChange` fired by `setText()` sees this flag and returns early, so the `suppressTrailingQuote` flag is not consumed prematurely.
+- **`suppressTrailingQuote`**: set `true` after `setText()`. On the next character event (the stray quote), strips the trailing `'` or `"` from the editor text.
+
+### Submit-time fallback
+
+If the user types fast and presses Enter before `onChange` processes the images, the REPL loop in `run()` does a second scan: `collectImagePathsFromText(rawInput)` only runs if `pendingImages` is empty (to avoid double-processing).
+
+### `[Image: ...]` guards
+
+Both `collectImagePathsFromText()` and `stripImagePathsFromText()` skip candidates starting with `[Image:` or `[Image ` to prevent the placeholder from being re-detected as an image path (since `.jpeg` in `uuid.jpeg` would otherwise match the regex).
+
+### Multiple drags
+
+Each drag **replaces** `pendingImages` (not appends). The previous `[Image: ...]` placeholders stay in the editor text; new ones are appended. If the user deletes a specific placeholder and drags again, only the new image is in `pendingImages`.
+
+## Model Capability Check
+
+Image support is declared per-model via `model.input` in the registry:
+
+| Model | `input` | Images? |
+|---|---|---|
+| deepseek-v4-pro / deepseek-v4-flash | `['text']` | No |
+| mimo-v2.5 | `['text', 'image']` | Yes |
+| mimo-v2.5-pro | `['text']` | No |
+| gemini-2.5-pro / flash / flash-lite | `['text', 'image']` | Yes |
+
+The check is centralized in `models/index.ts`:
+
+```typescript
+export function modelSupportsImages(model: Model<Api>): boolean {
+  return model.input.includes('image')
+}
+```
+
+Used in three places:
+1. **TUI onChange** (`app.ts`): if false, rejects paste with yellow warning
+2. **Tool creation** (`tools/index.ts` `createCodingTools`): VisionTool excluded if false
+3. **Model switch** (`agent.ts` `rebuildCoreTools`): rebuilds tools with correct flag after `/model` switch
+
+## No Base64 in JSONL
+
+### Problem
+
+`ImageContent.data` contains raw base64. Persisting it to JSONL would bloat session files (e.g. 200KB image → 270KB of base64 text).
+
+### Solution
+
+**Image cache on disk** (`imageUtils.storeImage`): on paste/drag, images are written to `~/.microcode/image-cache/<sessionId>/<uuid>.ext`.
+
+**Serialization transform** (`imageSerializer.replaceImageBlocksForPersistence`): in `SessionManager.saveMessages()`, ImageContent blocks are replaced with text references before JSONL append:
+
+```
+Input (in memory):   { type: 'image', data: '<base64>', mimeType: 'image/png' }
+Output (in JSONL):   { type: 'text', text: '[Image: image/png]' }
+```
+
+A shallow copy is created — live messages in memory retain base64 content.
+
+### Cleanup
+
+`cleanupImageCache(sessionId)` removes `~/.microcode/image-cache/<sessionId>/` on exit (via `app.onExit` and SIGINT/SIGTERM handlers in `main.tsx`).
+
+## Token Counting
+
+In `session/TokenEstimator.ts`, each image block is estimated at `IMAGE_TOKEN_ESTIMATE = 2000` tokens:
+
+```typescript
+if (block.type === 'image') {
+  chars += IMAGE_TOKEN_ESTIMATE * 4  // 2000 × 4 = 8000 chars → 2000 tokens
+}
+```
+
+Applied in both `user` and `toolResult` message roles.
+
+## Provider Compatibility
+
+pi-ai's `transformMessages()` handles `ImageContent` at the API boundary. Each provider converts to native format:
+
+| Provider | Format |
+|---|---|
+| Anthropic Messages | `{ type: "image", source: { type: "base64", media_type, data } }` |
+| OpenAI Completions | `{ type: "image_url", image_url: { url: "data:...;base64,..." } }` |
+| Google Gemini | `{ inlineData: { mimeType, data } }` |
+
+If a model's `input` does not include `'image'`, pi-ai replaces blocks with `"(image omitted)"` placeholder text as a safety net.
+
+## Files Summary
+
+| File | Role |
+|---|---|
+| `src/utils/imageUtils.ts` | Image I/O: path detection (quoted + unquoted regex), base64 read/write, disk cache, cleanup, `unquotePath`, `[Image:` guards |
+| `src/session/imageSerializer.ts` | Replaces `ImageContent` blocks with `[Image: mimeType]` text refs for JSONL persistence |
+| `src/tools/VisionTool/VisionTool.ts` | Tool logic: URL fetch / local file read, ImageContent construction |
+| `src/tools/VisionTool/index.ts` | Tool registration (`shouldDefer: false`) |
+| `src/tools/VisionTool/UI.tsx` | TUI rendering for vision tool execution |
+| `src/tools/index.ts` | `createCodingTools()`: conditional inclusion via `modelSupportsImages` flag |
+| `src/tui/app.ts` | Paste/drag detection, `suppressTrailingQuote` + `imagePathProcessing` guards, `agent.prompt(text, images)`, submit-time fallback |
+| `src/models/index.ts` | `modelSupportsImages()` helper |
+| `src/models/registry.ts` | `model.input` array per model definition |
+| `src/agent.ts` | `rebuildCoreTools()`: rebuilds core tools in-place on model switch, preserving MCP/toolsearch tools |
+| `src/session/TokenEstimator.ts` | Image token counting (2000 tokens/image) in user and toolResult messages |
+| `src/session/SessionManager.ts` | Calls `replaceImageBlocksForPersistence()` before each JSONL append |
+| `src/session/CompactionManager.ts` | `vision` in `COMPACTABLE_TOOL_NAMES` for microcompact |
+| `src/main.tsx` | `cleanupImageCache()` on exit (app.onExit + SIGINT/SIGTERM) |

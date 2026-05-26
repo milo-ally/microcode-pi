@@ -9,6 +9,7 @@ import type { McpServerConfig } from './mcp/types.ts'
 import { createMcpTools, createListMcpResourcesTool, createReadMcpResourceTool, registerMcpToolsAsDeferred } from './tools/index.ts'
 import { SessionManager } from './session/SessionManager.ts'
 import { PermissionManager, type PermissionMode, PERMISSION_MODES } from './permissions/index.ts'
+import { cleanupImageCache } from './utils/imageUtils.ts'
 
 declare const MACRO: {
   VERSION: string
@@ -394,6 +395,7 @@ Session Management:
     if (sessionId) {
       console.log(`\nResume this session with: microcode --resume ${sessionId.slice(0, 8)}`)
     }
+    cleanupImageCache(sessionId ?? '')
     process.exit(0)
   }
 
@@ -434,6 +436,7 @@ Session Management:
     if (sessionId) {
       console.log(`\nResume this session with: microcode --resume ${sessionId.slice(0, 8)}`)
     }
+    cleanupImageCache(sessionId ?? '')
     process.exit(0)
   }
 

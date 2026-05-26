@@ -46,7 +46,7 @@ export function createFileReadTool(cwd: string): AgentTool<typeof readSchema, Fi
     name: TOOL_NAME,
     label: 'Read',
     description:
-      'Read the contents of a file. Returns the file content with line numbers. Use offset and limit for large files.',
+      'Read the contents of a text file. Returns file content with line numbers. Use offset and limit for large files. Do NOT use for images, binaries, or non-text files — use the vision tool for images instead.',
     parameters: readSchema,
     async execute(
       _toolCallId: string,
@@ -58,7 +58,21 @@ export function createFileReadTool(cwd: string): AgentTool<typeof readSchema, Fi
 
       await access(filePath, constants.R_OK)
 
-      const content = await readFile(filePath, 'utf-8')
+      // Read raw buffer to detect binary files — the read tool is for text only.
+      const buf = await readFile(filePath)
+      const isBinary = buf.slice(0, 512).includes(0)
+      if (isBinary) {
+        const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+        const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext)
+        const tip = isImage
+          ? ' Use the vision tool to analyze image files.'
+          : ''
+        throw new Error(
+          `Cannot read binary file: ${filePath}.${tip}`,
+        )
+      }
+
+      const content = buf.toString('utf-8')
       const allLines = content.split('\n')
       const totalLines = allLines.length
 

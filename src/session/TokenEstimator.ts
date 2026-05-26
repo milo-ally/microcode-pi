@@ -19,6 +19,9 @@ export function estimateTokens(message: AgentMessage): number {
           if (block.type === 'text' && block.text) {
             chars += block.text.length
           }
+          if (block.type === 'image') {
+            chars += IMAGE_TOKEN_ESTIMATE * 4
+          }
         }
       }
       return Math.ceil(chars / 4)
